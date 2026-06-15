@@ -34,7 +34,7 @@ class SerialReader(threading.Thread):
         return {'fn': frame_num, 'eeg': eeg}
     
     def run(self):
-        with open(self.output_file, 'a') as f:
+        with open(self.output_file, 'w') as f:
             
             while self.running:
                 try:

@@ -1,5 +1,6 @@
 import pygame #@UnusedImport
 from mySerial import SerialReader
+from analyse.test_four import BlinkSegmentProcessor
 import threading
 import queue
 import time
@@ -97,8 +98,11 @@ import sys
 if __name__ == '__main__':
     now = time.perf_counter()
     # serial
-    serial_reader = SerialReader('COM6', 115200, f'four_610_ssvep.txt')
+    output_file = 'four_75_ssvep.txt'
+    serial_reader = SerialReader('COM6', 115200, output_file)
     serial_reader.start()
+    segment_processor = BlinkSegmentProcessor(output_file)
+    segment_processor.start()
     # serial_reader.send_command('b\r\n')  # 初始清空缓冲区
     #input
     input_thread = InputThread(serial_reader)
@@ -110,7 +114,7 @@ if __name__ == '__main__':
     adder.add_obj.connect(window.add_visual_obj)
     adder.remove_all_obj.connect(lambda: window.visual_objs.clear() or window.update())
     #timer
-    timer = TimerThread(adder, serial_reader, blink_duration=2.0, pause_duration=3.0)
+    timer = TimerThread(adder, serial_reader, blink_duration=2.0, pause_duration=5.0)
     timer.start()
 
     window.setWindowTitle("display blink test - 15Hz")
@@ -131,5 +135,8 @@ if __name__ == '__main__':
     input_thread.join(timeout=3.0)
     # 3. 停止 SerialReader
     serial_reader.stop()
+    # 4. 停止实时分析线程
+    segment_processor.stop()
+    segment_processor.join(timeout=2.0)
     print("All stopped.")
     
