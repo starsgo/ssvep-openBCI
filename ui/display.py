@@ -72,6 +72,7 @@ class display(QWidget):
         super().__init__(parent)
         self.visual_objs = list(visual_objs or [])
         self.background = background
+        self._red_dot_rect = None
         self.setMinimumSize(320, 240)
         self.timer = QTimer(self)
         self.timer.setSingleShot(True)
@@ -96,6 +97,19 @@ class display(QWidget):
     def add_visual_obj(self, obj):
         self.visual_objs.append(obj)
         self.schedule(); self.update()
+
+    def add_visual_point(self, x, y):
+        radius = 5
+        old_rect = self._red_dot_rect
+        self._red_dot_rect = QRectF(x - radius, y - radius, radius * 10, radius * 10)
+        dirty_rect = self._red_dot_rect if old_rect is None else old_rect.united(self._red_dot_rect)
+        self.update(dirty_rect.toAlignedRect())
+
+    def delete_visual_point(self):
+        if self._red_dot_rect is not None:
+            dirty_rect = self._red_dot_rect.toAlignedRect()
+            self._red_dot_rect = None
+            self.update(dirty_rect)
         
     def paintEvent(self, event):
         painter = QPainter(self)
@@ -109,10 +123,16 @@ class display(QWidget):
                 painter.drawPixmap(obj.rect, pix, QRectF(pix.rect()))
             else:
                 painter.fillRect(obj.rect, QColor("#FFFFFF"))
+        if self._red_dot_rect is not None:
+            painter.setPen(Qt.NoPen)
+            painter.setBrush(Qt.red)
+            painter.drawEllipse(self._red_dot_rect)
 
 class ObjAdder(QObject):
     add_obj = pyqtSignal(object)
     remove_all_obj = pyqtSignal()
+    add_visual_point = pyqtSignal(int, int)
+    delete_visual_point = pyqtSignal()
 
 def test_display():
     app = QApplication(sys.argv)
@@ -120,6 +140,8 @@ def test_display():
     adder = ObjAdder()
     adder.add_obj.connect(window.add_visual_obj)
     adder.remove_all_obj.connect(lambda: window.visual_objs.clear() or window.update())
+    adder.add_visual_point.connect(window.add_visual_point)
+    adder.delete_visual_point.connect(window.delete_visual_point)
     
     def add_later():
         for i in range(3):

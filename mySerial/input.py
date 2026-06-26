@@ -1,4 +1,3 @@
-from Cython import struct
 import serial
 import threading
 import time

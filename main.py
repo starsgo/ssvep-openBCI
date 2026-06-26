@@ -1,4 +1,3 @@
-import pygame #@UnusedImport
 from mySerial import SerialReader
 from analyse.test_four import BlinkSegmentProcessor
 import threading
@@ -19,6 +18,13 @@ def sleep_precise(seconds: float) -> None:
         if remaining > 0.001:
             time.sleep(remaining - 0.0005)
 
+import random
+BLOCK_SIZE = 200
+VISUAL_POINTS = ((150, 150), (850, 150), (850, 650), (150, 650))
+INDEX = [random.randint(0, 3) for _ in range(40)]
+print(f"INDEX: {INDEX}")
+
+from analyse import TARGET_FREQS
 #MARK: timer
 class TimerThread(threading.Thread):
     def __init__(self, adder, serial, blink_duration: float, pause_duration: float):
@@ -28,44 +34,33 @@ class TimerThread(threading.Thread):
         self.blink_duration = blink_duration
         self.pause_duration = pause_duration
         self.running = True
-        self.index = 0
 
     def run(self) -> None:
+        i = 0
         while self.running:
             if self.serial.status == 's':
                 self.adder.remove_all_obj.emit()
                 self.serial.send_event(COMMAND_PAUSE)
                 time.sleep(0.1)
                 continue
+            if i == 0:
+                self.adder.add_obj.emit(VisualObj((150-BLOCK_SIZE/2, 150-BLOCK_SIZE/2), (BLOCK_SIZE, BLOCK_SIZE), TARGET_FREQS[0], name="visualObj[1]", log_blink=True))
+                self.adder.add_obj.emit(VisualObj((850-BLOCK_SIZE/2, 150-BLOCK_SIZE/2), (BLOCK_SIZE, BLOCK_SIZE), TARGET_FREQS[1], name="visualObj[2]", log_blink=True))
+                self.adder.add_obj.emit(VisualObj((850-BLOCK_SIZE/2, 650-BLOCK_SIZE/2), (BLOCK_SIZE, BLOCK_SIZE), TARGET_FREQS[2], name="visualObj[3]", log_blink=True))
+                self.adder.add_obj.emit(VisualObj((150-BLOCK_SIZE/2, 650-BLOCK_SIZE/2), (BLOCK_SIZE, BLOCK_SIZE), TARGET_FREQS[3], name="visualObj[4]", log_blink=True))
+            # self.adder.remove_all_obj.emit()         
             
-            self.adder.remove_all_obj.emit()
+            # PAUSE
+            self.adder.delete_visual_point.emit()
             self.serial.send_event(COMMAND_PAUSE)
             sleep_precise(self.pause_duration)
             
-            # self.adder.add_obj.emit(VisualObj((400, 400), (300, 300), 15, name="visualObj[1]", log_blink=True))
-
-            # 1 2
-            # 3 4
-            self.adder.add_obj.emit(VisualObj((30, 30), (250, 250), 15, name="visualObj[1]", log_blink=True))
-            self.adder.add_obj.emit(VisualObj((730, 30), (250, 250), 9, name="visualObj[2]", log_blink=True))
-            
-            # self.adder.add_obj.emit(VisualObj((380, 280), (250, 250), 10, name="visualObj[5]", log_blink=True))
-            
-            self.adder.add_obj.emit(VisualObj((730, 530), (250, 250), 11, name="visualObj[3]", log_blink=True))
-            self.adder.add_obj.emit(VisualObj((30, 530), (250, 250), 13, name="visualObj[4]", log_blink=True))
-            
-            # if self.index % 4 == 0:
-            #     self.adder.add_obj.emit(VisualObj((400, 400), (300, 300), 9, name="visualObj[1]", log_blink=True))
-            # if self.index % 4 == 1:
-            #     self.adder.add_obj.emit(VisualObj((400, 400), (300, 300), 10, name="visualObj[3]", log_blink=True))
-            # if self.index % 4 == 2:
-            #     self.adder.add_obj.emit(VisualObj((400, 400), (300, 300), 11, name="visualObj[4]", log_blink=True))
-            # if self.index % 4 == 3:
-            #     self.adder.add_obj.emit(VisualObj((400, 400), (300, 300), 12, name="visualObj[2]", log_blink=True))
-            # self.index = self.index + 1
-             
+            #BLINK
+            self.adder.add_visual_point.emit(*VISUAL_POINTS[INDEX[i % len(INDEX)]])
             self.serial.send_event(COMMAND_BLINK)
             sleep_precise(self.blink_duration)
+            
+            i = i + 1
 
     def stop(self) -> None:
         self.running = False
@@ -97,24 +92,31 @@ from PyQt5.QtWidgets import QApplication, QWidget
 import sys
 if __name__ == '__main__':
     now = time.perf_counter()
-    # serial
-    output_file = 'four_75_ssvep.txt'
+    
+    #初始化 serial
+    #TODO: 修改输出文件
+    output_file = 'four_86_ssvep.txt'
     serial_reader = SerialReader('COM6', 115200, output_file)
     serial_reader.start()
+    
     segment_processor = BlinkSegmentProcessor(output_file)
     segment_processor.start()
-    # serial_reader.send_command('b\r\n')  # 初始清空缓冲区
-    #input
+    
+    #初始化input
     input_thread = InputThread(serial_reader)
     input_thread.start()
-    #app
+    
+    #初始化app
     app = QApplication(sys.argv)
     window = display()
     adder = ObjAdder()
     adder.add_obj.connect(window.add_visual_obj)
     adder.remove_all_obj.connect(lambda: window.visual_objs.clear() or window.update())
-    #timer
-    timer = TimerThread(adder, serial_reader, blink_duration=2.0, pause_duration=5.0)
+    adder.add_visual_point.connect(window.add_visual_point)
+    adder.delete_visual_point.connect(window.delete_visual_point)
+    
+    #初始化timer
+    timer = TimerThread(adder, serial_reader, blink_duration=2.0, pause_duration=3.0)
     timer.start()
 
     window.setWindowTitle("display blink test - 15Hz")

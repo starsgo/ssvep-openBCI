@@ -1,4 +1,5 @@
 PyQt5>=5.15
+pyserial
 numpy
 scipy
 scikit-learn

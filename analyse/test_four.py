@@ -14,11 +14,11 @@ from sklearn.decomposition import PCA
 NUM_CHANNELS = 8
 SAMPLE_RATE = 250
 NUM_FREQS = 4
-TARGET_FREQS = np.array([15, 13, 11, 9])
+TARGET_FREQS = np.array([15, 12, 10, 8.57])
 FBCCA_NUM_FILTER_BANKS = 5
-FBCCA_NUM_HARMONICS = 4
+FBCCA_NUM_HARMONICS = 3
 # FBCCA 不使用 blink 刚开始的 0.2 秒，随后取 1.5 秒稳定数据进行识别。
-FBCCA_DELAY_SAMPLES = round(0.2 * SAMPLE_RATE)
+FBCCA_DELAY_SAMPLES = round(0.3 * SAMPLE_RATE)
 FBCCA_GAZE_SAMPLES = round(1.5 * SAMPLE_RATE)
 
 
