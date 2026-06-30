@@ -99,6 +99,9 @@ if __name__ == '__main__':
     serial_reader = SerialReader('COM6', 115200, output_file)
     serial_reader.start()
     
+    with open(f"labels_{output_file}", '+a') as f:
+        f.write(INDEX)
+        
     segment_processor = BlinkSegmentProcessor(output_file)
     segment_processor.start()
     
