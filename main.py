@@ -20,7 +20,7 @@ def sleep_precise(seconds: float) -> None:
 
 import random
 BLOCK_SIZE = 200
-VISUAL_POINTS = ((150, 150), (850, 150), (850, 650), (150, 650))
+VISUAL_POINTS = ((150, 150), (1250, 150), (1250, 650), (150, 650))
 INDEX = [random.randint(0, 3) for _ in range(40)]
 print(f"INDEX: {INDEX}")
 
@@ -45,8 +45,8 @@ class TimerThread(threading.Thread):
                 continue
             if i == 0:
                 self.adder.add_obj.emit(VisualObj((150-BLOCK_SIZE/2, 150-BLOCK_SIZE/2), (BLOCK_SIZE, BLOCK_SIZE), TARGET_FREQS[0], name="visualObj[1]", log_blink=True))
-                self.adder.add_obj.emit(VisualObj((850-BLOCK_SIZE/2, 150-BLOCK_SIZE/2), (BLOCK_SIZE, BLOCK_SIZE), TARGET_FREQS[1], name="visualObj[2]", log_blink=True))
-                self.adder.add_obj.emit(VisualObj((850-BLOCK_SIZE/2, 650-BLOCK_SIZE/2), (BLOCK_SIZE, BLOCK_SIZE), TARGET_FREQS[2], name="visualObj[3]", log_blink=True))
+                self.adder.add_obj.emit(VisualObj((1250-BLOCK_SIZE/2, 150-BLOCK_SIZE/2), (BLOCK_SIZE, BLOCK_SIZE), TARGET_FREQS[1], name="visualObj[2]", log_blink=True))
+                self.adder.add_obj.emit(VisualObj((1250-BLOCK_SIZE/2, 650-BLOCK_SIZE/2), (BLOCK_SIZE, BLOCK_SIZE), TARGET_FREQS[2], name="visualObj[3]", log_blink=True))
                 self.adder.add_obj.emit(VisualObj((150-BLOCK_SIZE/2, 650-BLOCK_SIZE/2), (BLOCK_SIZE, BLOCK_SIZE), TARGET_FREQS[3], name="visualObj[4]", log_blink=True))
             # self.adder.remove_all_obj.emit()         
             
@@ -95,12 +95,13 @@ if __name__ == '__main__':
     
     #初始化 serial
     #TODO: 修改输出文件
-    output_file = 'four_86_ssvep.txt'
+    output_file = 'four_96_ssvep.txt'
     serial_reader = SerialReader('COM6', 115200, output_file)
     serial_reader.start()
     
     with open(f"labels_{output_file}", '+a') as f:
-        f.write(INDEX)
+        for x in INDEX:
+            f.write(str(x) + "\n")
         
     segment_processor = BlinkSegmentProcessor(output_file)
     segment_processor.start()
@@ -123,7 +124,7 @@ if __name__ == '__main__':
     timer.start()
 
     window.setWindowTitle("display blink test - 15Hz")
-    window.resize(1200, 900)
+    window.resize(1800, 900)
     window.show()
     app.exec_()
     
