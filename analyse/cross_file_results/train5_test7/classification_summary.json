@@ -1,0 +1,112 @@
+{
+  "evaluation": "cross-file: train only on train_eeg, evaluate only on test_eeg",
+  "train_eeg": "D:\\documents\\vibe4\\test_5_ssvep.txt",
+  "test_eeg": "D:\\documents\\vibe4\\test_7_ssvep.txt",
+  "train_marker_segments": 103,
+  "train_valid_trials": 88,
+  "train_excluded_trials": 15,
+  "train_class_counts": [
+    25,
+    31,
+    32
+  ],
+  "test_marker_segments": 68,
+  "test_valid_trials": 59,
+  "test_excluded_trials": 9,
+  "test_class_counts": [
+    17,
+    18,
+    24
+  ],
+  "sample_rate_hz": 250.0,
+  "common_samples": 373,
+  "analysis_duration_s": 1.492,
+  "frequencies_hz": [
+    15.0,
+    12.0,
+    10.0
+  ],
+  "results": {
+    "FBCCA": {
+      "accuracy": 0.9322033898305084,
+      "correct": 55,
+      "total": 59,
+      "per_frequency_accuracy": {
+        "15": 1.0,
+        "12": 0.9444444444444444,
+        "10": 0.875
+      },
+      "confusion_matrix": [
+        [
+          17,
+          0,
+          0
+        ],
+        [
+          0,
+          17,
+          1
+        ],
+        [
+          1,
+          2,
+          21
+        ]
+      ]
+    },
+    "ITCCA": {
+      "accuracy": 0.9661016949152542,
+      "correct": 57,
+      "total": 59,
+      "per_frequency_accuracy": {
+        "15": 1.0,
+        "12": 0.8888888888888888,
+        "10": 1.0
+      },
+      "confusion_matrix": [
+        [
+          17,
+          0,
+          0
+        ],
+        [
+          0,
+          16,
+          2
+        ],
+        [
+          0,
+          0,
+          24
+        ]
+      ]
+    },
+    "TRCA": {
+      "accuracy": 1.0,
+      "correct": 59,
+      "total": 59,
+      "per_frequency_accuracy": {
+        "15": 1.0,
+        "12": 1.0,
+        "10": 1.0
+      },
+      "confusion_matrix": [
+        [
+          17,
+          0,
+          0
+        ],
+        [
+          0,
+          18,
+          0
+        ],
+        [
+          0,
+          0,
+          24
+        ]
+      ]
+    }
+  }
+}

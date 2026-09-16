@@ -3,8 +3,8 @@
 ## 核心流程
 
 1. `main.py` 创建 `SerialReader`，连接 EEG 设备串口。
-2. `main.py` 创建 PyQt5 窗口，并通过 `TimerThread` 周期性显示四个闪烁刺激。
-3. `TimerThread` 在刺激开始时写入 `blink` 标记，在暂停阶段写入 `pause` 标记。
+2. `main.py` 在主线程创建 PsychoPy 全屏窗口，通过 `TimerThread` 提交原子刺激试次。
+3. PsychoPy 在首个目标 flip 上发送 `blink`，在清屏 flip 上发送 `pause`。
 4. `SerialReader` 将 EEG 帧和标记写入 TXT。
 5. `BlinkSegmentProcessor` 监听 TXT 新增内容，每遇到完整 `blink -> pause` 区间就执行一次预处理和 FBCCA。
 6. 分析结果汇总保存到 `analyse/realtime_results/`。
@@ -13,7 +13,8 @@
 
 - [main.py](D:/documents/vibe2/main.py)：实验运行入口，串口、GUI、计时和分析线程都在这里组装。
 - [mySerial/input.py](D:/documents/vibe2/mySerial/input.py)：负责串口命令发送、帧解析和 TXT 写入。
-- [ui/display.py](D:/documents/vibe2/ui/display.py)：负责闪烁刺激绘制和高精度边沿调度。
+- `ui/display_psy.py`：默认后端，负责 VSync 逐帧余弦刺激、相位记录和诊断图。
+- `ui/display.py`：保留的旧 PyQt5 后端。
 - [analyse/test_four.py](D:/documents/vibe2/analyse/test_four.py)：负责 EEG 预处理、滤波器组、CCA 和实时分段保存。
 - [analyse/test_realtime_four.py](D:/documents/vibe2/analyse/test_realtime_four.py)：负责离线回放测试。
 

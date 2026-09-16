@@ -1,0 +1,3 @@
+-r requirements.txt
+psychopy==2026.2.3
+matplotlib

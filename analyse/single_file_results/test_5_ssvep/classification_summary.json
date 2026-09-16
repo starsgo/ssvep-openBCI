@@ -1,0 +1,184 @@
+{
+  "eeg_file": "D:\\documents\\vibe4\\test_5_ssvep.txt",
+  "marker_segments": 103,
+  "valid_visual_trials": 88,
+  "excluded_visual_trials": 15,
+  "sample_rate_hz": 250.0,
+  "common_samples": 373,
+  "analysis_duration_s": 1.492,
+  "frequencies_hz": [
+    15.0,
+    12.0,
+    10.0
+  ],
+  "evaluation": {
+    "leave_one_out": "ITCCA/TRCA train on 87 and test on 1 per fold",
+    "stratified_holdout": "44 training trials and 44 test trials; random_state=42"
+  },
+  "leave_one_out_results": {
+    "FBCCA": {
+      "accuracy": 0.9886363636363636,
+      "correct": 87,
+      "total": 88,
+      "per_frequency_accuracy": {
+        "15": 1.0,
+        "12": 1.0,
+        "10": 0.96875
+      },
+      "confusion_matrix": [
+        [
+          25,
+          0,
+          0
+        ],
+        [
+          0,
+          31,
+          0
+        ],
+        [
+          0,
+          1,
+          31
+        ]
+      ]
+    },
+    "ITCCA": {
+      "accuracy": 0.9318181818181818,
+      "correct": 82,
+      "total": 88,
+      "per_frequency_accuracy": {
+        "15": 0.88,
+        "12": 0.967741935483871,
+        "10": 0.9375
+      },
+      "confusion_matrix": [
+        [
+          22,
+          0,
+          3
+        ],
+        [
+          0,
+          30,
+          1
+        ],
+        [
+          1,
+          1,
+          30
+        ]
+      ]
+    },
+    "TRCA": {
+      "accuracy": 1.0,
+      "correct": 88,
+      "total": 88,
+      "per_frequency_accuracy": {
+        "15": 1.0,
+        "12": 1.0,
+        "10": 1.0
+      },
+      "confusion_matrix": [
+        [
+          25,
+          0,
+          0
+        ],
+        [
+          0,
+          31,
+          0
+        ],
+        [
+          0,
+          0,
+          32
+        ]
+      ]
+    }
+  },
+  "stratified_holdout_results": {
+    "FBCCA": {
+      "accuracy": 1.0,
+      "correct": 44,
+      "total": 44,
+      "per_frequency_accuracy": {
+        "15": 1.0,
+        "12": 1.0,
+        "10": 1.0
+      },
+      "confusion_matrix": [
+        [
+          12,
+          0,
+          0
+        ],
+        [
+          0,
+          16,
+          0
+        ],
+        [
+          0,
+          0,
+          16
+        ]
+      ]
+    },
+    "ITCCA": {
+      "accuracy": 0.9772727272727273,
+      "correct": 43,
+      "total": 44,
+      "per_frequency_accuracy": {
+        "15": 1.0,
+        "12": 1.0,
+        "10": 0.9375
+      },
+      "confusion_matrix": [
+        [
+          12,
+          0,
+          0
+        ],
+        [
+          0,
+          16,
+          0
+        ],
+        [
+          1,
+          0,
+          15
+        ]
+      ]
+    },
+    "TRCA": {
+      "accuracy": 1.0,
+      "correct": 44,
+      "total": 44,
+      "per_frequency_accuracy": {
+        "15": 1.0,
+        "12": 1.0,
+        "10": 1.0
+      },
+      "confusion_matrix": [
+        [
+          12,
+          0,
+          0
+        ],
+        [
+          0,
+          16,
+          0
+        ],
+        [
+          0,
+          0,
+          16
+        ]
+      ]
+    }
+  }
+}

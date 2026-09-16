@@ -2,6 +2,8 @@ import sys
 import threading
 import time
 from dataclasses import dataclass, field
+from datetime import datetime
+from pathlib import Path
 from PyQt5.QtCore import QObject, QRectF, Qt, QTimer, pyqtSignal
 from PyQt5.QtGui import QColor, QImage, QPainter, QPixmap
 from PyQt5.QtWidgets import QApplication, QWidget
@@ -17,10 +19,23 @@ class VisualObj:
     # perf_counter 是高精度单调时钟，适合做短时间间隔计算。
     start: float = field(default_factory=time.perf_counter)
     last_edge: int = 0
-    
-    def __post_init__(self):
-        with open(f"record/{self.name}_log.txt", "a", encoding="utf-8") as f:
-            f.write(f"-------------{self.name} initialized at {self.start:.6f}-------\n")
+    _log_path: Path | None = field(default=None, init=False, repr=False)
+
+    def set_record_dir(self, record_dir):
+        """Attach this object to one display run's timestamped log directory."""
+        if not self.log_blink:
+            return
+        record_dir = Path(record_dir)
+        record_dir.mkdir(parents=True, exist_ok=True)
+        log_path = record_dir / f"{self.name}_log.txt"
+        if self._log_path == log_path:
+            return
+        self._log_path = log_path
+        with self._log_path.open("a", encoding="utf-8") as f:
+            f.write(
+                f"-------------{self.name} initialized at "
+                f"{self.start:.6f}-------\n"
+            )
         
     def pixmap(self):
         if isinstance(self.image, QPixmap):
@@ -47,8 +62,8 @@ class VisualObj:
         # edge 变化才说明发生了一次亮/灭翻转；打印的就是实际翻转被处理的时间。
         if edge == self.last_edge:
             return
-        if self.log_blink:
-            with open(f"record/{self.name}_log.txt", "a", encoding="utf-8") as f:
+        if self.log_blink and self._log_path is not None:
+            with self._log_path.open("a", encoding="utf-8") as f:
                 f.write(f"{self.name} blink at {now - self.start:.6f}s edge={self.edge(now)}\n")
             # print(f"{self.name} blink at {now - self.start:.6f}s edge={self.edge(now)}")
         self.last_edge = edge
@@ -68,12 +83,27 @@ class VisualObj:
         return QRectF(*self.position, *self.size)
 
 class display(QWidget):
-    def __init__(self, visual_objs=None, parent=None, background=QColor("#000000")):
+    def __init__(
+        self,
+        visual_objs=None,
+        parent=None,
+        background=QColor("#000000"),
+        record_root="record",
+        run_id=None,
+        fullscreen=True,
+    ):
         super().__init__(parent)
         self.visual_objs = list(visual_objs or [])
+        self.run_id = run_id or datetime.now().strftime("%Y%m%d_%H%M%S")
+        self.record_dir = Path(record_root) / self.run_id
+        for obj in self.visual_objs:
+            obj.set_record_dir(self.record_dir)
         self.background = background
+        self.fullscreen = bool(fullscreen)
         self._red_dot_rect = None
         self.setMinimumSize(320, 240)
+        if self.fullscreen:
+            self.setWindowState(self.windowState() | Qt.WindowMaximized)
         self.timer = QTimer(self)
         self.timer.setSingleShot(True)
         # Qt.PreciseTimer 请求 Qt 尽量用高精度定时器；实际精度仍受系统调度影响。
@@ -95,8 +125,26 @@ class display(QWidget):
             self.timer.start(min(waits))
             
     def add_visual_obj(self, obj):
+        obj.set_record_dir(self.record_dir)
         self.visual_objs.append(obj)
         self.schedule(); self.update()
+
+    def set_fullscreen(self, enabled=True):
+        """Switch between a maximized switchable window and normal mode."""
+        self.fullscreen = bool(enabled)
+        if self.fullscreen:
+            self.showMaximized()
+        else:
+            self.showNormal()
+
+    def keyPressEvent(self, event):
+        if event.key() == Qt.Key_Escape:
+            self.close()
+            return
+        if event.key() == Qt.Key_F11:
+            self.set_fullscreen(not self.fullscreen)
+            return
+        super().keyPressEvent(event)
 
     def add_visual_point(self, x, y):
         radius = 5

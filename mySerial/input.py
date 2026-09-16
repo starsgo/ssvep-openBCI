@@ -31,6 +31,25 @@ class SerialReader(threading.Thread):
             eeg.append(val)
         # 加速度 XH,XL, YH,YL, ZH,ZL，大端16位有符号
         return {'fn': frame_num, 'eeg': eeg}
+
+    def _pop_next_frame(self):
+        """Return the next aligned 0xA0...0xC0 frame from the byte buffer."""
+        while len(self.buffer) >= 33:
+            start = self.buffer.find(b'\xA0')
+            if start < 0:
+                self.buffer.clear()
+                return None
+            if start > 0:
+                del self.buffer[:start]
+            if len(self.buffer) < 33:
+                return None
+            if self.buffer[32] != 0xC0:
+                del self.buffer[0]
+                continue
+            frame = bytes(self.buffer[:33])
+            del self.buffer[:33]
+            return frame
+        return None
     
     def run(self):
         with open(self.output_file, 'w') as f:
@@ -61,9 +80,13 @@ class SerialReader(threading.Thread):
                         # 假设数据以换行符结束，解析为行
                         
                         if self.last_command == 'b\r\n':  # 只有在接收到开始传输命令后才处理数据
-                            while len(self.buffer) >= 33:
-                                frame = self.parse_data(self.buffer[:33])
-                                self.buffer = self.buffer[33:]
+                            while True:
+                                raw_frame = self._pop_next_frame()
+                                if raw_frame is None:
+                                    break
+                                frame = self.parse_data(raw_frame)
+                                if frame is None:
+                                    continue
                                 # 简单解析：添加时间戳（精确到毫秒）
                                 # timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S.%f')[:-3]
                                 timestamp = time.perf_counter()

@@ -3,7 +3,7 @@
 Vibe2 是一个用于 SSVEP 脑电实验的 Python 项目。项目包含三个主要部分：
 
 - 串口采集：从 EEG 设备读取 8 通道数据，并将数据写入 TXT。
-- 视觉刺激：使用 PyQt5 显示不同频率的闪烁方块。
+- 视觉刺激：默认使用 PsychoPy 按显示器刷新帧生成余弦亮度闪烁；旧 PyQt5 后端保留备用。
 - 实时分析：按 `blink -> pause` 标记切分数据段，并使用 FBCCA 预测当前注视频率。
 
 当前默认目标频率为 `15 Hz`、`13 Hz`、`11 Hz`、`9 Hz`。
@@ -13,11 +13,13 @@ Vibe2 是一个用于 SSVEP 脑电实验的 Python 项目。项目包含三个�
 ```text
 .
 ├── main.py                     # 主程序：串口、视觉刺激、实时分析线程入口
-├── requirements.txt            # Python 依赖
+├── requirements.txt            # 通用 Python 依赖
+├── requirements-psychopy.txt  # PsychoPy 实验环境依赖
 ├── mySerial/
 │   └── input.py                # 串口读取与事件标记写入
 ├── ui/
-│   ├── display.py              # PyQt5 闪烁刺激窗口
+│   ├── display.py              # 旧 PyQt5 闪烁刺激窗口
+│   ├── display_psy.py          # PsychoPy 逐帧刺激、计时记录与诊断图
 │   └── graph.py                # 简单实时曲线组件
 ├── analyse/
 │   ├── test_four.py            # EEG 预处理、FBCCA、实时分段处理
@@ -29,12 +31,12 @@ Vibe2 是一个用于 SSVEP 脑电实验的 Python 项目。项目包含三个�
 
 ## 环境准备
 
-建议使用 Python 3.10 或更新版本。
+正式刺激环境使用 Python 3.11：
 
 ```powershell
-python -m venv .venv
-.\.venv\Scripts\Activate.ps1
-pip install -r requirements.txt
+conda create -n BCI-psychopy python=3.11 pip -y
+conda activate BCI-psychopy
+python -s -m pip install -r requirements-psychopy.txt
 ```
 
 如果运行时提示缺少 `serial`、`pygame` 或 `Cython`，再安装：
@@ -45,7 +47,7 @@ pip install pyserial pygame Cython
 
 ## 运行主程序
 
-主程序会连接串口、启动闪烁刺激窗口，并实时处理采集到的数据。
+主程序会连接串口、启动全屏 PsychoPy 刺激窗口，并实时处理采集到的数据。
 
 ```powershell
 python main.py
@@ -64,7 +66,20 @@ python main.py
 - `s`：停止传输 EEG 数据。
 - `exit`：结束输入线程。
 
-窗口关闭后，程序会依次停止计时线程、串口线程和实时分析线程。
+按 Escape、关闭窗口或在终端输入 `exit` 后，程序会停止所有线程并把逐帧记录保存到 `record/<运行时间>/`。
+
+PsychoPy 默认使用覆盖屏幕的无边框普通窗口而非独占全屏，因此可以用 Alt+Tab 切换到 VS Code；如明确需要独占模式，可传入 `fullscr=True`。旧 PyQt5 后端 `ui/display.py` 默认使用可切换的最大化窗口，F11 可切换窗口模式，Escape 可关闭窗口；传入 `fullscreen=False` 可用于窗口化调试。它的亮灭边沿日志按运行隔离，保存为 `record/<运行时间>/visualObj[x]_log.txt`。PsychoPy 后端不使用这些边沿日志，而是保存逐帧 CSV。
+
+## PsychoPy 视觉计时测试
+
+不连接 EEG 串口，仅运行一次 1.5 秒的 15/12/10 Hz 全屏刺激：
+
+```powershell
+conda activate BCI-psychopy
+python -s -m ui.display_psy --duration 1.5
+```
+
+每个目标生成一个逐帧 CSV，同时输出 `waveform_diagnostics.png`、`waveform_3d_trials.png` 和 `timing_summary.json`。二维诊断图显示实际下发的余弦亮度、亮度误差和共享帧间隔；三维地形图以 trial、时间和亮度分别作为 X、Y、Z 轴。屏幕物理发光时序仍应使用光电二极管验证。
 
 ## 离线回放测试
 

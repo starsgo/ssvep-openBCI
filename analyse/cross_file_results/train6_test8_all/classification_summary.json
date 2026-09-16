@@ -1,0 +1,116 @@
+{
+  "evaluation": "cross-file: train only on train_eeg, evaluate only on test_eeg",
+  "train_eeg": "D:\\documents\\vibe4\\test_6_ssvep.txt",
+  "test_eeg": "D:\\documents\\vibe4\\test_8_ssvep.txt",
+  "train_marker_segments": 107,
+  "train_valid_trials": 94,
+  "train_excluded_trials": 13,
+  "train_trials_used": 107,
+  "include_invalid_train": true,
+  "train_class_counts": [
+    17,
+    43,
+    47
+  ],
+  "test_marker_segments": 68,
+  "test_valid_trials": 55,
+  "test_excluded_trials": 13,
+  "test_trials_used": 68,
+  "include_invalid_test": true,
+  "test_class_counts": [
+    23,
+    25,
+    20
+  ],
+  "sample_rate_hz": 250.0,
+  "common_samples": 373,
+  "analysis_duration_s": 1.492,
+  "frequencies_hz": [
+    15.0,
+    12.0,
+    10.0
+  ],
+  "results": {
+    "FBCCA": {
+      "accuracy": 0.9411764705882353,
+      "correct": 64,
+      "total": 68,
+      "per_frequency_accuracy": {
+        "15": 1.0,
+        "12": 0.88,
+        "10": 0.95
+      },
+      "confusion_matrix": [
+        [
+          23,
+          0,
+          0
+        ],
+        [
+          1,
+          22,
+          2
+        ],
+        [
+          1,
+          0,
+          19
+        ]
+      ]
+    },
+    "ITCCA": {
+      "accuracy": 0.9264705882352942,
+      "correct": 63,
+      "total": 68,
+      "per_frequency_accuracy": {
+        "15": 0.9130434782608695,
+        "12": 1.0,
+        "10": 0.85
+      },
+      "confusion_matrix": [
+        [
+          21,
+          0,
+          2
+        ],
+        [
+          0,
+          25,
+          0
+        ],
+        [
+          0,
+          3,
+          17
+        ]
+      ]
+    },
+    "TRCA": {
+      "accuracy": 1.0,
+      "correct": 68,
+      "total": 68,
+      "per_frequency_accuracy": {
+        "15": 1.0,
+        "12": 1.0,
+        "10": 1.0
+      },
+      "confusion_matrix": [
+        [
+          23,
+          0,
+          0
+        ],
+        [
+          0,
+          25,
+          0
+        ],
+        [
+          0,
+          0,
+          20
+        ]
+      ]
+    }
+  }
+}

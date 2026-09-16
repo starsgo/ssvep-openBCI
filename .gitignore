@@ -1,5 +1,8 @@
 *.txt
 !requirements.txt
+!requirements-psychopy.txt
 *.mat
 *.npy
 *.pyc
+*.log
+record/
