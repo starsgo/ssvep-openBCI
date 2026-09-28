@@ -7,3 +7,7 @@
 *.log
 record/
 *.jpg
+analyse/cross_file_results/
+analyse/data/
+analyse/realtime_results/
+analyse/single_file_results/
