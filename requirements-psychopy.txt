@@ -1,3 +1,3 @@
+# Full experiment environment; use Python 3.11.
 -r requirements.txt
-psychopy==2026.2.3
-matplotlib
+psychopy>=2026.2.3,<2026.3

@@ -37,7 +37,7 @@ Vibe2 是一个用于 SSVEP 脑电实验的 Python 项目。项目包含三个�
 
 ## 环境准备
 
-正式刺激环境使用 Python 3.11：
+正式刺激环境使用 Python 3.11，安装包含 PsychoPy 的完整依赖：
 
 ```powershell
 conda create -n BCI-psychopy python=3.11 pip -y
@@ -45,11 +45,13 @@ conda activate BCI-psychopy
 python -s -m pip install -r requirements-psychopy.txt
 ```
 
-如果运行时提示缺少 `serial`、`pygame` 或 `Cython`，再安装：
+只运行离线分析或旧 PyQt5 界面时，可在 Python 3.11 环境中安装基础依赖：
 
 ```powershell
-pip install pyserial pygame Cython
+python -m pip install -r requirements.txt
 ```
+
+依赖文件只列出项目直接使用的包，不包含本机路径；pip 会根据当前系统安装间接依赖。
 
 ## 运行主程序
 
