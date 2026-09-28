@@ -11,3 +11,7 @@ analyse/cross_file_results/
 analyse/data/
 analyse/realtime_results/
 analyse/single_file_results/
+__pycache__
+.vscode
+.agents
+.tmp_video_review
