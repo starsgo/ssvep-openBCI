@@ -10,8 +10,9 @@ from analyse.test_four import BlinkSegmentProcessor, TARGET_FREQS
 # ============================================================
 # 本脚本只用于离线测试实时处理线程。
 # 它不会连接串口，也不会启动 GUI。
-# 线程会直接从项目根目录读取已经存在的 four_61_ssvep.txt。
-TXT_FILE = Path("four_73_ssvep.txt")
+# 线程会直接从项目根目录读取一份已有的 1.5 秒实验记录。
+TXT_FILE = Path("test_2_ssvep.txt")
+LABEL_FILE = Path(f"labels_{TXT_FILE.name}")
 
 # 测试结果集中保存在 analyse/realtime_test_segments/<运行时间>/。
 # 不会为每个 blink -> pause 区间单独创建文件。
@@ -97,9 +98,9 @@ def main() -> None:
     # eeg_segments.npy：
     #   每一项对应一个独立 blink -> pause 区间经过预处理后的 EEG。
     # fbcca_scores.npy：
-    #   每一行对应一个独立区间，四列依次为 [15, 11, 13, 9] Hz 的分数。
+    #   每一行对应一个独立区间，各列顺序与 TARGET_FREQS 一致。
     # fbcca_prediction_indexes.npy：
-    #   每一项是当前区间预测频率在 [15, 11, 13, 9] 中的索引。
+    #   每一项是当前区间预测频率在 TARGET_FREQS 中的索引。
     # fbcca_prediction_frequencies.npy：
     #   每一项是当前区间最终预测的实际频率，单位 Hz。
     segments_file = output_dir / "eeg_segments.npy"
@@ -114,7 +115,7 @@ def main() -> None:
 
     if eeg_segments.shape[0] != expected_segments:
         raise RuntimeError("aggregate segment count does not match processed segment count")
-    if fbcca_scores.shape != (expected_segments, 4):
+    if fbcca_scores.shape != (expected_segments, len(TARGET_FREQS)):
         raise RuntimeError("FBCCA score shape does not match processed segment count")
     if fbcca_indexes.shape != (expected_segments,):
         raise RuntimeError("FBCCA prediction index count does not match segment count")
@@ -124,14 +125,24 @@ def main() -> None:
     # ============================================================
     # 生成最终准确率总结文本
     # ============================================================
-    # 测试文件中的目标顺序按 [15, 11, 13, 9] Hz 循环。
-    # 如果后续实验改变刺激顺序，只需修改 test_four.py 中的 TARGET_FREQS。
-    expected_frequencies = np.resize(TARGET_FREQS, expected_segments)
+    if not LABEL_FILE.is_file():
+        raise FileNotFoundError(f"Label file does not exist: {LABEL_FILE.resolve()}")
+    label_indexes = np.loadtxt(LABEL_FILE, dtype=int, ndmin=1)
+    if len(label_indexes) < expected_segments:
+        raise RuntimeError(
+            f"not enough labels: got {len(label_indexes)}, need {expected_segments}"
+        )
+    if np.any(label_indexes[:expected_segments] < 0) or np.any(
+        label_indexes[:expected_segments] >= len(TARGET_FREQS)
+    ):
+        raise RuntimeError("label file contains an out-of-range target index")
+    expected_frequencies = TARGET_FREQS[label_indexes[:expected_segments]]
     correct = fbcca_frequencies == expected_frequencies
     accuracy = float(np.mean(correct))
     summary_file = output_dir / "accuracy_summary.txt"
     summary_lines = [
         f"TXT file: {TXT_FILE.resolve()}",
+        f"Label file: {LABEL_FILE.resolve()}",
         f"Processed segments: {expected_segments}",
         f"Target frequency order: {TARGET_FREQS.tolist()} Hz",
         f"Correct predictions: {int(np.sum(correct))}/{expected_segments}",

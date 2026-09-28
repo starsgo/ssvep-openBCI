@@ -1,18 +1,22 @@
-# Vibe2
+# Vibe4
 
 Vibe2 是一个用于 SSVEP 脑电实验的 Python 项目。项目包含三个主要部分：
 
 - 串口采集：从 EEG 设备读取 8 通道数据，并将数据写入 TXT。
 - 视觉刺激：默认使用 PsychoPy 按显示器刷新帧生成余弦亮度闪烁；旧 PyQt5 后端保留备用。
-- 实时分析：按 `blink -> pause` 标记切分数据段，并使用 FBCCA 预测当前注视频率。
+- 实时分析：按 `blink -> pause` 标记切分每段最多 1.5 秒（375 点）的数据，并使用 FBCCA 预测当前注视频率。
+- 鼠标注视模拟：记录眼动阶段结束时的鼠标位置，只闪烁鼠标所在半屏的目标。
 
-当前默认目标频率为 `15 Hz`、`13 Hz`、`11 Hz`、`9 Hz`。
+当前左右半屏各配置一组 `15 Hz`、`12 Hz`、`10 Hz` 目标。不同目标可以复用频率；FBCCA 会按 `object.json` 首次出现的顺序对频率去重。
 
 ## 项目结构
 
 ```text
 .
 ├── main.py                     # 主程序：串口、视觉刺激、实时分析线程入口
+├── experiment.py               # 目标配置校验与随机 INDEX
+├── gaze/                       # 鼠标注视采样、坐标转换与左右判断
+├── object.json                 # 目标位置、尺寸和频率配置
 ├── requirements.txt            # 通用 Python 依赖
 ├── requirements-psychopy.txt  # PsychoPy 实验环境依赖
 ├── mySerial/
@@ -23,6 +27,8 @@ Vibe2 是一个用于 SSVEP 脑电实验的 Python 项目。项目包含三个�
 │   └── graph.py                # 简单实时曲线组件
 ├── analyse/
 │   ├── test_four.py            # EEG 预处理、FBCCA、实时分段处理
+│   ├── fbcca.py                # 单段在线 Filter-Bank CCA 分类
+│   ├── prediction_results.py   # 目标反查、逐轮结果与正确率保存
 │   ├── test_realtime_four.py   # 离线回放 TXT 并测试实时分析流程
 │   ├── realtime_results/       # 正式运行输出结果
 │   └── realtime_test_segments/ # 离线测试输出结果
@@ -50,15 +56,17 @@ pip install pyserial pygame Cython
 主程序会连接串口、启动全屏 PsychoPy 刺激窗口，并实时处理采集到的数据。
 
 ```powershell
-python main.py
+python -s main.py
 ```
 
-运行前请检查 [main.py](D:/documents/vibe2/main.py) 中的这些配置：
+运行前请检查 `main.py` 和 `object.json` 中的这些配置：
 
-- `SerialReader('COM6', 115200, output_file)`：串口号和波特率。
-- `output_file = 'four_75_ssvep.txt'`：串口原始输出文件名。
-- `blink_duration=2.0`：每轮闪烁持续时间，单位秒。
-- `pause_duration=5.0`：两轮刺激之间的暂停时间，单位秒。
+- `SerialReader('COM5', 115200, output_file)`：串口号和波特率。
+- `output_file = 'test_0_ssvep.txt'`：串口原始输出文件名。
+- `object.json`：每个目标显式配置 `screen`（`left` 或 `right`）、左上角坐标、尺寸和 `frequency_hz`；目标名称与数组 INDEX 均从 0 开始，分类频率则按首次出现顺序去重。
+- 默认阶段时长依次为休息 2.5 秒、提示 0.5 秒、眼动 0.5 秒和闪烁 1.5 秒。
+
+休息、提示和眼动阶段均显示中灰背景与全黑目标。眼动阶段结束时，程序读取鼠标位置并只闪烁 `object.json` 中对应 `screen` 的目标；上一段预测会在休息阶段以 `predit:<频率>Hz 左边/右边` 显示。系统按预测频率与注视侧反查目标 INDEX，并将其与实际 INDEX 的逐轮比较保存到 `record/<运行时间>/prediction_results.csv`。
 
 终端输入串口命令：
 
@@ -66,9 +74,9 @@ python main.py
 - `s`：停止传输 EEG 数据。
 - `exit`：结束输入线程。
 
-按 Escape、关闭窗口或在终端输入 `exit` 后，程序会停止所有线程并把逐帧记录保存到 `record/<运行时间>/`。
+Escape 只退出全屏，不停止窗口或串口；串口 EEG 仍需手动输入 `s` 停止。关闭窗口或在终端输入 `exit` 后，程序会停止所有线程并把逐帧记录保存到 `record/<运行时间>/`。
 
-PsychoPy 默认使用覆盖屏幕的无边框普通窗口而非独占全屏，因此可以用 Alt+Tab 切换到 VS Code；如明确需要独占模式，可传入 `fullscr=True`。旧 PyQt5 后端 `ui/display.py` 默认使用可切换的最大化窗口，F11 可切换窗口模式，Escape 可关闭窗口；传入 `fullscreen=False` 可用于窗口化调试。它的亮灭边沿日志按运行隔离，保存为 `record/<运行时间>/visualObj[x]_log.txt`。PsychoPy 后端不使用这些边沿日志，而是保存逐帧 CSV。
+主程序使用 PsychoPy 真全屏 `fullscr=True` 和逻辑主屏 `screen=0`。旧 PyQt5 后端 `ui/display.py` 默认使用可切换的最大化窗口，F11 可切换窗口模式；传入 `fullscreen=False` 可用于窗口化调试。它的亮灭边沿日志按运行隔离，保存为 `record/<运行时间>/visualObj[x]_log.txt`。PsychoPy 后端不使用这些边沿日志，而是保存逐帧 CSV。
 
 ## PsychoPy 视觉计时测试
 
@@ -86,10 +94,10 @@ python -s -m ui.display_psy --duration 1.5
 离线测试不连接串口，也不启动 GUI。它会读取已有 TXT 文件，按 `blink -> pause` 标记回放实时处理流程。
 
 ```powershell
-python -B -m analyse.test_realtime_four
+python -s -B -m analyse.test_realtime_four
 ```
 
-运行前请检查 [analyse/test_realtime_four.py](D:/documents/vibe2/analyse/test_realtime_four.py) 中的 `TXT_FILE` 是否指向实际存在的 TXT 文件。
+运行前请检查 `analyse/test_realtime_four.py` 中的 `TXT_FILE` 和 `LABEL_FILE` 是否指向配套文件。
 
 测试结果会写入：
 
@@ -114,6 +122,7 @@ analyse/realtime_results/
 - `fbcca_scores.npy`：每个区间在四个目标频率上的 FBCCA 分数。
 - `fbcca_prediction_indexes.npy`：预测频率在 `TARGET_FREQS` 中的索引。
 - `fbcca_prediction_frequencies.npy`：预测出的实际频率，单位 Hz。
+- `classification_results.csv`：逐段采样点数、各目标分数和最终预测，便于直接检查。
 - `eeg_trials.npy`、`eeg_labels.npy`、`*.mat`：凑齐完整频率 block 后生成的汇总数据。
 
 ## 注意事项

@@ -139,7 +139,7 @@ class display(QWidget):
 
     def keyPressEvent(self, event):
         if event.key() == Qt.Key_Escape:
-            self.close()
+            self.set_fullscreen(False)
             return
         if event.key() == Qt.Key_F11:
             self.set_fullscreen(not self.fullscreen)

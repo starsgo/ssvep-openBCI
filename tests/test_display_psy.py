@@ -1,7 +1,10 @@
 import math
+import sys
+import types
 import unittest
 from collections import defaultdict
 from threading import Event
+from unittest.mock import patch
 
 from ui.display_psy import (
     ObjAdder,
@@ -44,6 +47,47 @@ class PhaseMathTests(unittest.TestCase):
 
 
 class CompatibilityTests(unittest.TestCase):
+    def test_escape_leaves_fullscreen_without_closing_renderer(self):
+        event_module = types.ModuleType("event")
+        event_module.getKeys = lambda **_kwargs: ["escape"]
+        psychopy_module = types.ModuleType("psychopy")
+        psychopy_module.event = event_module
+
+        renderer = display_psy.__new__(display_psy)
+        renderer._fullscr = True
+        renderer.win = type(
+            "FakeWindow",
+            (),
+            {
+                "fullscr": True,
+                "winHandle": type("FakeHandle", (), {"has_exit": False})(),
+            },
+        )()
+
+        with patch.dict(sys.modules, {"psychopy": psychopy_module}):
+            wants_close = renderer._window_wants_close()
+
+        self.assertFalse(wants_close)
+        self.assertFalse(renderer.win.fullscr)
+        self.assertFalse(renderer._fullscr)
+
+    def test_mouse_position_is_published_in_top_left_coordinates(self):
+        received = []
+
+        class FakeMouse:
+            @staticmethod
+            def getPos():
+                return (-860.0, 440.0)
+
+        renderer = display_psy.__new__(display_psy)
+        renderer.win = type("FakeWindow", (), {"size": (1920, 1080)})()
+        renderer._mouse = FakeMouse()
+        renderer._gaze_callback = received.append
+
+        renderer._publish_mouse_position()
+
+        self.assertEqual(received, [(100, 100)])
+
     def test_legacy_top_left_coordinates_are_preserved(self):
         self.assertEqual(
             top_left_to_center((50, 50), (200, 200), (1800, 900)),
@@ -84,6 +128,37 @@ class CompatibilityTests(unittest.TestCase):
         self.assertEqual(captured["lineWidth"], 1)
         self.assertEqual(captured["lineColor"], "red")
         self.assertEqual(captured["fillColor"], "red")
+
+    def test_prompt_text_is_centered(self):
+        captured = {}
+
+        class FakeVisual:
+            @staticmethod
+            def TextStim(win, **kwargs):
+                captured.update(kwargs)
+                return object()
+
+        renderer = display_psy.__new__(display_psy)
+        renderer.win = object()
+        renderer._visual = FakeVisual()
+        renderer.set_prompt_text("注视目标0")
+
+        self.assertEqual(captured["text"], "注视目标0")
+        self.assertEqual(captured["pos"], (0, 0))
+
+    def test_non_selected_targets_are_drawn_black(self):
+        class FakeStim:
+            fillColor = None
+
+            def draw(self):
+                pass
+
+        inactive = VisualObj_psy((0, 0), (10, 10), 12.0, name="inactive")
+        inactive._stim = FakeStim()
+
+        display_psy._draw_black([inactive])
+
+        self.assertEqual(inactive._stim.fillColor, -1.0)
 
     def test_trial_targets_share_onset_and_callbacks_run_on_flip(self):
         class FakeStim:

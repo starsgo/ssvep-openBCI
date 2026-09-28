@@ -13,18 +13,18 @@ class QtBlinkLogTests(unittest.TestCase):
                 (0, 0),
                 (10, 10),
                 15.0,
-                name="visualObj[1]",
+                name="visualObj[0]",
                 log_blink=True,
             )
 
             obj.set_record_dir(run_dir)
             obj.update_blink(obj.start + 0.55 / obj.blink_frequency)
 
-            log_path = run_dir / "visualObj[1]_log.txt"
+            log_path = run_dir / "visualObj[0]_log.txt"
             self.assertTrue(log_path.exists())
             contents = log_path.read_text(encoding="utf-8")
-            self.assertIn("visualObj[1] initialized", contents)
-            self.assertIn("visualObj[1] blink", contents)
+            self.assertIn("visualObj[0] initialized", contents)
+            self.assertIn("visualObj[0] blink", contents)
 
     def test_reattaching_same_run_does_not_duplicate_initialization(self):
         with tempfile.TemporaryDirectory() as temp_dir:

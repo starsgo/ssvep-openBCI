@@ -21,6 +21,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable, Iterable, Sequence
 
+from gaze import psychopy_to_top_left
+
 
 TAU = 2.0 * math.pi
 CSV_FIELDS = (
@@ -49,6 +51,12 @@ def phase_at(elapsed_s: float, frequency_hz: float) -> float:
 def brightness_at_phase(phase_rad: float) -> float:
     """Map cosine phase to a black-to-white brightness value."""
     return 0.5 * (1.0 + math.cos(phase_rad))
+
+
+def format_prediction_text(frequency_hz: float, side: str | None = None) -> str:
+    side_text = {"left": "左边", "right": "右边"}.get(side, "")
+    suffix = f" {side_text}" if side_text else ""
+    return f"predit:{frequency_hz:g}Hz{suffix}"
 
 
 def wrapped_phase_error(predicted: float, actual: float) -> float:
@@ -132,6 +140,9 @@ class ObjAdder:
         self.remove_all_obj = QueuedSignal(self.dispatcher)
         self.add_visual_point = QueuedSignal(self.dispatcher)
         self.delete_visual_point = QueuedSignal(self.dispatcher)
+        self.set_static_targets = QueuedSignal(self.dispatcher)
+        self.set_status_text = QueuedSignal(self.dispatcher)
+        self.set_prompt_text = QueuedSignal(self.dispatcher)
         self.start_trial = QueuedSignal(self.dispatcher)
         self.close_requested = QueuedSignal(self.dispatcher)
 
@@ -154,6 +165,8 @@ class VisualObj_psy:
 
     def attach(self, win: Any) -> None:
         """Create the PsychoPy stimulus lazily in the owning render thread."""
+        if self._stim is not None:
+            return
         from psychopy import visual
 
         pos = top_left_to_center(self.position, self.size, win.size)
@@ -215,6 +228,7 @@ class _Trial:
     on_start: Callable[[], Any] | None
     on_stop: Callable[[], Any] | None
     done_event: threading.Event | None
+    static_objects: list[VisualObj_psy] = field(default_factory=list)
     onset_time: float | None = None
     offset_time: float | None = None
     frame_index: int = 0
@@ -232,7 +246,7 @@ class display_psy:
         self,
         visual_objs: Iterable[VisualObj_psy] | None = None,
         parent: Any = None,
-        background: Any = "black",
+        background: Any = 0.0,
         *,
         fullscr: bool = False,
         size: tuple[int, int] = (1920, 1080),
@@ -243,7 +257,7 @@ class display_psy:
         run_id: str | None = None,
     ) -> None:
         del parent
-        from psychopy import visual
+        from psychopy import event, visual
 
         self._visual = visual
         self._background = background
@@ -257,6 +271,11 @@ class display_psy:
         self._saved = False
         self._cue_position: tuple[float, float] | None = None
         self._cue_stim: Any = None
+        self._status_text: str | None = None
+        self._status_stim: Any = None
+        self._prompt_text: str | None = None
+        self._prompt_stim: Any = None
+        self._static_brightness = 1.0
         self.visual_objs: list[VisualObj_psy] = list(visual_objs or [])
         self._pending_trials: deque[_Trial] = deque()
         self._active_trial: _Trial | None = None
@@ -268,6 +287,8 @@ class display_psy:
         self._records: dict[str, list[FrameRecord]] = defaultdict(list)
         self._trial_summaries: list[dict[str, Any]] = []
         self._callback_errors: list[str] = []
+        self.ready_event = threading.Event()
+        self._gaze_callback: Callable[[tuple[int, int]], Any] | None = None
 
         self.run_id = run_id or datetime.now().strftime("%Y%m%d_%H%M%S")
         self.record_dir = Path(record_root) / self.run_id
@@ -286,6 +307,13 @@ class display_psy:
             title=self._title,
             autoLog=False,
         )
+        # The mouse is the gaze-point substitute in this experiment. PsychoPy
+        # hides it by default for stimulus windows, so explicitly show it.
+        try:
+            self.win.mouseVisible = True
+        except AttributeError:
+            pass
+        self._mouse = event.Mouse(win=self.win, visible=True)
 
     def setWindowTitle(self, title: str) -> None:  # Qt-compatible spelling
         self._title = str(title)
@@ -313,6 +341,52 @@ class display_psy:
 
     def clear_visual_objs(self) -> None:
         self.visual_objs.clear()
+
+    def set_static_targets(self, objects: Iterable[VisualObj_psy]) -> None:
+        """Show all configured targets as black rectangles."""
+        targets = list(objects)
+        for obj in targets:
+            if not isinstance(obj, VisualObj_psy):
+                raise TypeError("all static targets must be VisualObj_psy instances")
+            obj.attach(self.win)
+        self.visual_objs[:] = targets
+        self._static_brightness = 0.0
+
+    def set_status_text(self, text: str | None) -> None:
+        """Set the small status message shown at the bottom of the screen."""
+        normalized = None if text is None else str(text).strip()
+        self._status_text = normalized or None
+        if self._status_text is None:
+            self._status_stim = None
+            return
+        _, window_height = self.win.size
+        self._status_stim = self._visual.TextStim(
+            self.win,
+            text=self._status_text,
+            pos=(0, -float(window_height) / 2.0 + 28.0),
+            height=18.0,
+            units="pix",
+            color="white",
+            autoLog=False,
+        )
+
+    def set_prompt_text(self, text: str | None) -> None:
+        """Set the large instruction shown at the centre of the screen."""
+        normalized = None if text is None else str(text).strip()
+        self._prompt_text = normalized or None
+        self._prompt_stim = (
+            None
+            if self._prompt_text is None
+            else self._visual.TextStim(
+                self.win,
+                text=self._prompt_text,
+                pos=(0, 0),
+                height=36.0,
+                units="pix",
+                color="white",
+                autoLog=False,
+            )
+        )
 
     def add_visual_point(self, x: float, y: float) -> None:
         window_width, window_height = self.win.size
@@ -344,8 +418,10 @@ class display_psy:
         on_start: Callable[[], Any] | None = None,
         on_stop: Callable[[], Any] | None = None,
         done_event: threading.Event | None = None,
+        static_objects: Iterable[VisualObj_psy] | None = None,
     ) -> None:
         objects = list(objects)
+        static_objects = list(static_objects or [])
         if not objects:
             raise ValueError("a visual trial requires at least one object")
         if duration_s <= 0:
@@ -354,9 +430,14 @@ class display_psy:
             if not isinstance(obj, VisualObj_psy):
                 raise TypeError("all trial objects must be VisualObj_psy instances")
             obj.attach(self.win)
+        for obj in static_objects:
+            if not isinstance(obj, VisualObj_psy):
+                raise TypeError("all static trial objects must be VisualObj_psy instances")
+            obj.attach(self.win)
         trial = _Trial(
             trial_id=self._next_trial_id,
             objects=objects,
+            static_objects=static_objects,
             duration_s=float(duration_s),
             on_start=on_start,
             on_stop=on_stop,
@@ -369,9 +450,34 @@ class display_psy:
     def request_close(self) -> None:
         self._close_requested = True
 
+    def set_gaze_callback(
+        self, callback: Callable[[tuple[int, int]], Any] | None
+    ) -> None:
+        self._gaze_callback = callback
+
+    def _publish_mouse_position(self) -> None:
+        if self._gaze_callback is None:
+            return
+        self._gaze_callback(psychopy_to_top_left(self._mouse.getPos(), self.win.size))
+
     def _draw_cue(self) -> None:
         if self._cue_stim is not None:
             self._cue_stim.draw()
+
+    def _draw_status(self) -> None:
+        status_stim = getattr(self, "_status_stim", None)
+        if status_stim is not None:
+            status_stim.draw()
+
+    def _draw_prompt(self) -> None:
+        prompt_stim = getattr(self, "_prompt_stim", None)
+        if prompt_stim is not None:
+            prompt_stim.draw()
+
+    @staticmethod
+    def _draw_black(objects: Iterable[VisualObj_psy]) -> None:
+        for obj in objects:
+            obj.draw(0.0)
 
     def _safe_callback(self, callback: Callable[[], Any] | None) -> None:
         if callback is None:
@@ -385,6 +491,7 @@ class display_psy:
         flip_times: list[float] = []
         self.win.recordFrameIntervals = False
         for _ in range(max(2, self._warmup_frames)):
+            self._draw_legacy_objects(0.0)
             flip_time = self.win.flip()
             if flip_time is not None:
                 flip_times.append(float(flip_time))
@@ -405,20 +512,29 @@ class display_psy:
         from psychopy import event
 
         if event.getKeys(keyList=["escape"]):
-            return True
+            # Escape only leaves fullscreen. Acquisition and the command input
+            # remain alive until the operator explicitly sends `s`/`exit`.
+            if bool(getattr(self.win, "fullscr", self._fullscr)):
+                self.win.fullscr = False
+            self._fullscr = False
         handle = getattr(self.win, "winHandle", None)
         return bool(getattr(handle, "has_exit", False))
 
     def _activate_next_trial(self) -> None:
         if self._active_trial is None and self._pending_trials:
             self._active_trial = self._pending_trials.popleft()
-            self.visual_objs[:] = self._active_trial.objects
+            self.visual_objs[:] = (
+                self._active_trial.static_objects + self._active_trial.objects
+            )
+            self._static_brightness = 0.0
 
     def _prime_trial(self, trial: _Trial) -> float:
         """Upload/draw resources invisibly before the time-critical onset flip."""
-        for obj in trial.objects:
-            obj.draw(0.0)
+        self._draw_black(trial.static_objects)
+        self._draw_black(trial.objects)
         self._draw_cue()
+        self._draw_status()
+        self._draw_prompt()
         flip_time = float(self.win.flip())
         trial.primed = True
         self.win.frameIntervals = []
@@ -476,9 +592,12 @@ class display_psy:
     def _draw_first_trial_frame(self, trial: _Trial) -> float:
         phases = [0.0 for _ in trial.objects]
         brightnesses = [1.0 for _ in trial.objects]
+        self._draw_black(trial.static_objects)
         for obj in trial.objects:
             obj.draw(1.0)
         self._draw_cue()
+        self._draw_status()
+        self._draw_prompt()
         self.win.callOnFlip(self._safe_callback, trial.on_start)
         flip_time = float(self.win.flip())
         self._append_frame_records(
@@ -497,9 +616,12 @@ class display_psy:
         predicted_elapsed = max(0.0, predicted_flip - trial.onset_time)
         phases = [obj.phase(predicted_elapsed) for obj in trial.objects]
         brightnesses = [brightness_at_phase(value) for value in phases]
+        self._draw_black(trial.static_objects)
         for obj, brightness in zip(trial.objects, brightnesses):
             obj.draw(brightness)
         self._draw_cue()
+        self._draw_status()
+        self._draw_prompt()
         flip_time = float(self.win.flip())
         self._append_frame_records(
             trial,
@@ -513,7 +635,11 @@ class display_psy:
 
     def _finish_trial(self, trial: _Trial, *, aborted: bool = False) -> float:
         trial.aborted = aborted
+        self._draw_black(trial.static_objects)
+        self._draw_black(trial.objects)
         self._draw_cue()
+        self._draw_status()
+        self._draw_prompt()
         self.win.callOnFlip(self._safe_callback, trial.on_stop)
         flip_time = float(self.win.flip())
         trial.offset_time = flip_time
@@ -542,6 +668,9 @@ class display_psy:
             {
                 "trial_id": trial.trial_id,
                 "target_hz": [float(obj.blink_frequency) for obj in trial.objects],
+                "static_target_hz": [
+                    float(obj.blink_frequency) for obj in trial.static_objects
+                ],
                 "onset_time_s": trial.onset_time,
                 "offset_time_s": trial.offset_time,
                 "requested_duration_s": trial.duration_s,
@@ -552,7 +681,8 @@ class display_psy:
                 "aborted": aborted,
             }
         )
-        self.visual_objs.clear()
+        self.visual_objs[:] = trial.static_objects + trial.objects
+        self._static_brightness = 0.0
         if trial.done_event is not None:
             trial.done_event.set()
         self._active_trial = None
@@ -562,17 +692,22 @@ class display_psy:
     def _draw_legacy_objects(self, predicted_flip: float) -> None:
         del predicted_flip
         for obj in self.visual_objs:
-            obj.draw(1.0)
+            obj.draw(self._static_brightness)
         self._draw_cue()
+        self._draw_status()
+        self._draw_prompt()
 
     def run(self, adder: ObjAdder, stop_event: threading.Event | None = None) -> int:
         """Run the frame loop on the main thread until close is requested."""
         self._warm_up()
+        self._publish_mouse_position()
+        self.ready_event.set()
         try:
             while not self._close_requested:
                 if stop_event is not None and stop_event.is_set():
                     break
                 adder.dispatcher.drain()
+                self._publish_mouse_position()
                 if self._window_wants_close():
                     break
                 self._activate_next_trial()
@@ -835,6 +970,32 @@ VisualObj = VisualObj_psy
 visualObj = VisualObj_psy
 
 
+def build_visual_objects(targets: Iterable[Any]) -> list[VisualObj_psy]:
+    return [
+        VisualObj_psy(
+            (target.x, target.y),
+            (target.width, target.height),
+            target.frequency_hz,
+            name=target.name,
+            log_blink=True,
+        )
+        for target in targets
+    ]
+
+
+def partition_visual_objects(
+    targets: Iterable[Any],
+    visual_objects: Iterable[VisualObj_psy],
+    side: str,
+) -> tuple[list[VisualObj_psy], list[VisualObj_psy]]:
+    """Split rendered targets into the flashing and static screen sides."""
+    active: list[VisualObj_psy] = []
+    inactive: list[VisualObj_psy] = []
+    for target, visual_object in zip(targets, visual_objects, strict=True):
+        (active if target.screen == side else inactive).append(visual_object)
+    return active, inactive
+
+
 def run_realtime_test(duration_s: float = 1.5) -> Path:
     """Run one full-screen 15/12/10 Hz hardware timing trial."""
     adder = ObjAdder()
@@ -848,9 +1009,9 @@ def run_realtime_test(duration_s: float = 1.5) -> Path:
     done = threading.Event()
 
     objects = [
-        VisualObj_psy((50, 50), (200, 200), 15.0, name="visualObj[1]", log_blink=True),
-        VisualObj_psy((800, 50), (200, 200), 12.0, name="visualObj[2]", log_blink=True),
-        VisualObj_psy((425, 550), (200, 200), 10.0, name="visualObj[3]", log_blink=True),
+        VisualObj_psy((50, 50), (200, 200), 15.0, name="visualObj[0]", log_blink=True),
+        VisualObj_psy((800, 50), (200, 200), 12.0, name="visualObj[1]", log_blink=True),
+        VisualObj_psy((425, 550), (200, 200), 10.0, name="visualObj[2]", log_blink=True),
     ]
 
     def submit() -> None:

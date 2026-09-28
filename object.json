@@ -1,0 +1,58 @@
+{
+  "targets": [
+    {
+      "name": "visualObj[0]",
+      "screen": "left",
+      "x": 50,
+      "y": 50,
+      "width": 200,
+      "height": 200,
+      "frequency_hz": 15.0
+    },
+    {
+      "name": "visualObj[1]",
+      "screen": "left",
+      "x": 700,
+      "y": 50,
+      "width": 200,
+      "height": 200,
+      "frequency_hz": 12.0
+    },
+    {
+      "name": "visualObj[2]",
+      "screen": "left",
+      "x": 600,
+      "y": 550,
+      "width": 200,
+      "height": 200,
+      "frequency_hz": 10.0
+    },
+    {
+      "name": "visualObj[3]",
+      "screen": "right",
+      "x": 1250,
+      "y": 50,
+      "width": 200,
+      "height": 200,
+      "frequency_hz": 15.0
+    },
+    {
+      "name": "visualObj[4]",
+      "screen": "right",
+      "x": 1700,
+      "y": 50,
+      "width": 200,
+      "height": 200,
+      "frequency_hz": 12.0
+    },
+    {
+      "name": "visualObj[5]",
+      "screen": "right",
+      "x": 1400,
+      "y": 550,
+      "width": 200,
+      "height": 200,
+      "frequency_hz": 10.0
+    }
+  ]
+}

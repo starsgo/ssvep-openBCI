@@ -21,8 +21,8 @@
 
 `eeg_segments.npy`
 
-- 形状：`(区间数, PCA分量数, 统一采样点数)`
-- 来源：每个完整 blink 区间独立执行带通滤波、50 Hz 陷波、去均值、归一化和 PCA。
+- 形状：`(区间数, 8通道, 统一采样点数)`
+- 来源：每个完整 blink 区间最多取前 375 点，独立执行带通滤波、50 Hz 陷波、去均值和标准差归一化；在线路径不执行 PCA。
 - 用途：保存全部已处理区间，便于后续复查或重新分析。
 
 不同区间采样点数可能略有差异，保存汇总文件时会统一截取到当前最短长度。
@@ -31,36 +31,39 @@
 
 `fbcca_scores.npy`
 
-- 形状：`(区间数, 4)`
+- 形状：`(区间数, 目标数)`
 - 每一行对应一个 blink 区间。
-- 四列顺序与 `analyse/test_four.py` 中的 `TARGET_FREQS` 一致，当前为 `[15, 13, 11, 9] Hz`。
+- 各列按 `object.json` 中频率首次出现的顺序排列；左右目标复用频率时只生成一列，默认是 `[15, 12, 10] Hz`。
 
 `fbcca_prediction_indexes.npy`
 
 - 形状：`(区间数,)`
-- 每项为预测结果在 `TARGET_FREQS` 中的索引。
+- 每项为预测频率在去重频率列表中的索引，不包含左右边信息。
 
 `fbcca_prediction_frequencies.npy`
 
 - 形状：`(区间数,)`
 - 每项为最终预测频率，单位 Hz。
 
-## Trial 汇总
+`classification_results.csv`
 
-`eeg_trials.npy`
+- 每行保存段编号、实际使用的采样点数、目标频率、全部 FBCCA 分数和最终预测。
+- 适合不加载 NumPy 文件时直接检查在线分类结果。
 
-- 形状：`(trial数, 频率数, 通道数, 采样点数)`
-- 当前每 4 个区间组成一个完整 trial。
+`record/<运行时间>/prediction_results.csv`
 
-`eeg_labels.npy`
+- 每行保存实际 INDEX、目标名称和频率、眼动结束位置、左右边、FBCCA 预测频率，以及由“预测频率＋左右边”反查出的目标 INDEX。
+- 同时保存实际目标在 `object.json` 中的位置、大小和所属边，以及眼动左右边是否正确。
+- `correct` 表示反查出的目标 INDEX 是否与当轮实际 INDEX 相同。
+- `object.json` 的数组位置就是 0-based INDEX，默认目标名称为 `visualObj[0]` 到 `visualObj[5]`。
 
-- 形状：`(trial数, 频率数)`
-- 标签按 `TARGET_FREQS` 的顺序生成。
+`record/<运行时间>/prediction_accuracy.json`
 
-`eeg_data_<txt文件名>.mat`
+- 随每次预测更新，保存累计预测数、正确数、错误数和正确率。
 
-- MATLAB 格式汇总文件。
-- 由 `scipy.io.savemat` 生成，便于后续在 MATLAB 或 notebook 中分析。
+## 离线 notebook 数据
+
+`eeg_trials.npy`、`eeg_labels.npy` 和 MAT 文件属于离线 notebook 工作流，在线处理器不再假设随机 INDEX 能组成固定频率 block，也不会生成这些汇总文件。
 
 ## 输出目录
 
@@ -76,4 +79,4 @@ analyse/realtime_results/
 analyse/realtime_test_segments/<运行时间>/
 ```
 
-离线测试额外生成 `accuracy_summary.txt`，用于检查每个区间预测是否符合预期顺序。
+离线测试额外读取配套的 `labels_*.txt` 并生成 `accuracy_summary.txt`，用于逐段核对期望目标和预测结果。
