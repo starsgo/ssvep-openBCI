@@ -260,7 +260,7 @@ def main() -> int:
     target_frequencies = unique_target_frequencies(targets)
     print(f"INDEX: {target_indexes}")
 
-    output_file = "test_15_ssvep.txt"
+    output_file = "test_22_ssvep.txt"
     serial_reader = SerialReader("COM3", 115200, output_file)
     serial_reader.start()
     Path(f"labels_{output_file}").write_text(
