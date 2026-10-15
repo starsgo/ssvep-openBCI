@@ -39,7 +39,7 @@ class TargetConfigurationTests(unittest.TestCase):
             [15.0, 12.0, 10.0] * 3,
         )
         self.assertEqual(unique_target_frequencies(targets), [15.0, 12.0, 10.0])
-        self.assertEqual(targets[0].center, (427.0, 240.0))
+        self.assertEqual(targets[0].center, (220.0, 240.0))
         self.assertEqual(
             [target.screen for target in targets],
             ["left"] * 3 + ["right"] * 3 + ["bottom"] * 3,
@@ -53,6 +53,8 @@ class TargetConfigurationTests(unittest.TestCase):
         self.assertEqual(triangles, [2, 4, 6])
         self.assertEqual([targets[index].frequency_hz for index in triangles], [10., 12., 15.])
         for index, (target, obj) in enumerate(zip(targets, objects)):
+            self.assertGreaterEqual(min(target.x, target.y, 1920-target.x-target.width,
+                                        1080-target.y-target.height), 100)
             self.assertEqual(target.color, '#8B0000' if index in triangles else '#000000')
             self.assertEqual((obj.shape, obj.color, obj.label), (target.shape, target.color, target.label))
             self.assertEqual(gaze_region(target.center, 1920, 1080), target.screen)
@@ -64,6 +66,10 @@ class TargetConfigurationTests(unittest.TestCase):
                 overlap = (min(target.x+target.width, other.x+other.width) > max(target.x, other.x)
                            and min(target.y+target.height, other.y+other.height) > max(target.y, other.y))
                 self.assertFalse(overlap, (target.name, other.name))
+                if other.screen == target.screen:
+                    dx = max(target.x-other.x-other.width, other.x-target.x-target.width, 0)
+                    dy = max(target.y-other.y-other.height, other.y-target.y-target.height, 0)
+                    self.assertGreaterEqual(np.hypot(dx, dy), 100, (target.name, other.name))
 
     def test_legacy_configuration_without_style_fields_still_loads(self):
         document = {'targets': [dict(name=t.name, screen=t.screen, x=t.x, y=t.y,
