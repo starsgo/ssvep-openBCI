@@ -1,4 +1,4 @@
-"""Run the real-time SSVEP experiment after connecting gaze and pressing Start."""
+"""Run the real-time SSVEP experiment after pressing Start, with optional gaze."""
 
 from __future__ import annotations
 
@@ -15,8 +15,7 @@ from experiment import (
     load_targets,
     unique_target_frequencies,
 )
-from gaze import GazeTracker, Region
-from gaze.api import ApiGazeTracker
+from gaze import GazePointProvider, GazeTracker, Region
 from ui.start_screen import show_start_screen
 from mySerial import SerialReader
 from ui.display_psy import (
@@ -52,7 +51,7 @@ class TimerThread(threading.Thread):
         self,
         adder: ObjAdder,
         serial: SerialReader,
-        gaze_tracker: GazeTracker,
+        gaze_tracker: GazeTracker | GazePointProvider,
         targets: list[TargetSpec],
         visual_objects: list[VisualObj],
         target_indexes: list[int],
@@ -63,6 +62,7 @@ class TimerThread(threading.Thread):
         cue_duration: float = 0.5,
         gaze_duration: float = 0.5,
         prediction_results_file: str | Path | None = None,
+        nogaze: bool = False,
     ) -> None:
         super().__init__(daemon=True)
         if len(targets) != len(visual_objects):
@@ -80,6 +80,9 @@ class TimerThread(threading.Thread):
         self.pause_duration = float(pause_duration)
         self.cue_duration = float(cue_duration)
         self.gaze_duration = float(gaze_duration)
+        self.nogaze = bool(nogaze)
+        self._last_gaze_position = (0, 0)
+        self._has_gaze_measurement = False
         self.results = PredictionResultRecorder(targets, prediction_results_file)
         self._stop_event = threading.Event()
         self._prediction_lock = threading.Lock()
@@ -97,10 +100,14 @@ class TimerThread(threading.Thread):
         """Keep the latest measured point seen during this target's gaze phase."""
         deadline = time.monotonic() + max(0.0, self.gaze_duration)
         position = None
+        measurement = getattr(self.gaze_tracker, 'get_current_measurement', None)
+        measurement = measurement or self.gaze_tracker.get_current_position
         while self.running:
-            current = self.gaze_tracker.get_current_position()
+            current = measurement()
             if current is not None:
                 position = current
+                self._last_gaze_position = current
+                self._has_gaze_measurement = True
             remaining = deadline - time.monotonic()
             if remaining <= 0:
                 return position
@@ -114,10 +121,16 @@ class TimerThread(threading.Thread):
         actual_index: int,
         gaze_position: tuple[int, int],
         gaze_side: Region,
+        *,
+        flicker_side: Region | None = None,
+        region_source: str = "gaze",
+        gaze_point_source: str = "measurement",
     ) -> None:
         with self._prediction_lock:
             self.results.register(
-                segment_index, actual_index, gaze_position, gaze_side
+                segment_index, actual_index, gaze_position, gaze_side,
+                flicker_side=flicker_side, region_source=region_source,
+                gaze_point_source=gaze_point_source,
             )
             prediction = self._predictions.get(segment_index)
             if prediction is not None:
@@ -133,7 +146,7 @@ class TimerThread(threading.Thread):
                 self.adder.set_status_text.emit(
                     format_prediction_text(
                         prediction.prediction_frequency,
-                        None if metadata is None else metadata.gaze_side,
+                        None if metadata is None else metadata.flicker_side,
                     )
                 )
 
@@ -153,7 +166,7 @@ class TimerThread(threading.Thread):
                 self.adder.set_status_text.emit(
                     format_prediction_text(
                         prediction.prediction_frequency,
-                        None if metadata is None else metadata.gaze_side,
+                        None if metadata is None else metadata.flicker_side,
                     )
                 )
 
@@ -164,10 +177,6 @@ class TimerThread(threading.Thread):
 
     def run(self) -> None:
         while self.running and self.render_ready is not None and not self.render_ready.wait(0.05):
-            pass
-        if not self.running:
-            return
-        while self.running and not self.gaze_tracker.ready_event.wait(0.05):
             pass
         if not self.running:
             return
@@ -205,27 +214,27 @@ class TimerThread(threading.Thread):
             self.adder.set_prompt_text.emit(None)
             self.adder.add_visual_point.emit(cue_x, cue_y)
             position = self._collect_gaze()
+            gaze_point_source = "measurement"
             if not self.running:
                 break
             if position is None:
-                # Keep this target visible until a measured coordinate arrives;
-                # do not restart the rest/cue phases on every missing sample.
-                reason = getattr(self.gaze_tracker, 'last_error', None) or '尚无新的注视坐标'
-                self.adder.set_status_text.emit('等待眼动坐标')
-                print(f'[gaze] 等待坐标，目标 {target_index}: {reason}', flush=True)
-                while self.running and self.serial.status != 's' and position is None:
-                    if not self._wait(0.01):
-                        break
-                    position = self.gaze_tracker.get_current_position()
-                if not self.running:
-                    break
-            if position is None or self.serial.status == 's':
+                # A display default is not a measured frame. Prefer retained
+                # history; only use the origin when no measurement has existed.
+                retained = self.gaze_tracker.get_current_position()
+                position = self._last_gaze_position if retained is None else retained
+                has_history = (self._has_gaze_measurement
+                               or getattr(self.gaze_tracker, 'has_measurement', False) is True)
+                gaze_point_source = "history" if has_history else "default"
+            if self.serial.status == 's':
                 continue
 
-            region = self.gaze_tracker.region_for(position)
+            gaze_side = self.gaze_tracker.region_for(position)
+            region = self.targets[target_index].screen if self.nogaze else gaze_side
             segment_index = trial_count + 1
             self._register_trial_metadata(
-                segment_index, target_index, position, region
+                segment_index, target_index, position, gaze_side,
+                flicker_side=region, region_source="target" if self.nogaze else "gaze",
+                gaze_point_source=gaze_point_source,
             )
             active_objects, inactive_objects = partition_visual_objects(
                 self.targets, self.visual_objects, region
@@ -293,12 +302,15 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--gaze-source", choices=("mouse", "api"), default="api",
                         help="use mouse simulation or measured coordinates from the eye API")
     parser.add_argument("--gaze-api-url", default="http://127.0.0.1:8765/gaze")
+    parser.add_argument("--nogaze", action="store_true",
+                        help="select flicker side from the target; keep gaze input and display")
     args = parser.parse_args(argv)
     selection = show_start_screen(args.gaze_source, args.gaze_api_url)
     if selection is None:
         return 0
     args.gaze_source = selection.source
     args.connected_gaze_tracker = selection.tracker
+    args.gaze_point = getattr(selection, 'gaze_point', None)
     try:
         return run_experiment(args)
     finally:
@@ -351,26 +363,29 @@ def run_experiment(args) -> int:
     # makes startup visibly distinct from a stalled, empty gray window.
     window.set_static_targets(visual_objects)
     if args.gaze_source == "api":
-        gaze_tracker = getattr(args, "connected_gaze_tracker", None) or ApiGazeTracker(
-            args.gaze_api_url, window_size=WINDOW_SIZE)
+        # Only the start-screen button connects to the eye service.
+        gaze_tracker = getattr(args, "connected_gaze_tracker", None)
         window.set_gaze_callback(None)
-        window.set_gaze_provider(gaze_tracker.get_current_position)
-        window.set_status_text("实时眼动已连接")
+        window.set_status_text("实时眼动输入" if gaze_tracker is not None else "默认注视点 (0, 0)")
         print(f"Gaze input: {args.gaze_api_url}; gaze phase remains 0.5 seconds")
     else:
         gaze_tracker = GazeTracker(window_size=WINDOW_SIZE)
         window.set_gaze_callback(gaze_tracker.update_position)
-    if not gaze_tracker.is_alive():
+    gaze_point = getattr(args, 'gaze_point', None) or GazePointProvider(window_size=WINDOW_SIZE)
+    gaze_point.source = gaze_tracker
+    window.set_gaze_provider(gaze_point.get_current_position)
+    if gaze_tracker is not None and not gaze_tracker.is_alive():
         gaze_tracker.start()
     timer = TimerThread(
         adder,
         serial_reader,
-        gaze_tracker,
+        gaze_point,
         targets,
         visual_objects,
         target_indexes,
         render_ready=window.ready_event,
         prediction_results_file=window.record_dir / "prediction_results.csv",
+        nogaze=args.nogaze,
     )
     segment_processor = BlinkSegmentProcessor(
         output_file,
@@ -391,8 +406,9 @@ def run_experiment(args) -> int:
         print("GUI closed, stopping threads...")
         timer.stop()
         timer.join(timeout=2.0)
-        gaze_tracker.stop()
-        gaze_tracker.join(timeout=1.0)
+        if gaze_tracker is not None:
+            gaze_tracker.stop()
+            gaze_tracker.join(timeout=1.0)
         input_thread.running = False
         input_thread.join(timeout=1.0)
         serial_reader.stop()

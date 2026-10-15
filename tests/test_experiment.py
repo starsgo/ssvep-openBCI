@@ -16,7 +16,7 @@ from experiment import (
     load_targets,
     unique_target_frequencies,
 )
-from gaze import GazeTracker, gaze_region
+from gaze import GazePointProvider, GazeTracker, gaze_region
 from gaze.api import ApiGazeTracker
 from main import TimerThread
 from ui.display_psy import build_visual_objects, partition_visual_objects
@@ -202,14 +202,12 @@ class ExperimentFlowTests(unittest.TestCase):
             timer.gaze_tracker.get_current_position = Mock(return_value=None)
             self.assertIsNone(timer._collect_gaze())
 
-    def test_missing_gaze_waits_for_data_without_restarting_target_then_flickers(self):
+    def test_never_acquired_gaze_flickers_left_without_waiting(self):
         timer, signals = self.make_timer()
         timer.pause_duration = timer.cue_duration = timer.gaze_duration = 0
         timer.blink_duration = 0
-        timer.gaze_tracker.ready_event = threading.Event()
-        timer.gaze_tracker.ready_event.set()
-        timer.gaze_tracker.get_current_position = Mock(side_effect=[None, None, (1919, 0)])
-        timer.gaze_tracker.last_error = 'no_measurement'
+        timer.gaze_tracker = GazePointProvider()
+        timer.target_indexes = [3]
         def submit_trial(*values):
             signals['start_trial'].values.append(values)
             values[4].set()
@@ -222,8 +220,75 @@ class ExperimentFlowTests(unittest.TestCase):
         self.assertFalse(timer.is_alive())
         self.assertEqual(len(signals['add_visual_point'].values), 1)
         self.assertEqual(len(signals['start_trial'].values), 1)
-        self.assertEqual(timer.results.metadata_for(1).gaze_side, 'right')
-        self.assertIn(('等待眼动坐标',), signals['set_status_text'].values)
+        metadata = timer.results.metadata_for(1)
+        self.assertEqual(metadata.gaze_side, 'left')
+        self.assertEqual(metadata.gaze_position, (0, 0))
+        self.assertEqual(metadata.gaze_point_source, 'default')
+        self.assertNotIn(('等待眼动坐标',), signals['set_status_text'].values)
+
+    def test_retained_history_from_before_gaze_phase_decides_flicker(self):
+        timer, signals = self.make_timer()
+        source = Mock()
+        source.get_current_position.return_value = (1919, 540)
+        point = GazePointProvider(source)
+        self.assertEqual(point.get_current_position(), (1919, 540))
+        source.get_current_position.return_value = None
+        timer.gaze_tracker = point
+        timer.pause_duration = timer.cue_duration = 0
+        timer.gaze_duration = .03
+        def submit_trial(*values):
+            signals['start_trial'].values.append(values)
+            values[4].set()
+            timer.stop()
+        signals['start_trial'].emit = submit_trial
+        timer.start()
+        timer.join(timeout=.5)
+        timer.stop()
+        timer.join(timeout=.5)
+        self.assertFalse(timer.is_alive())
+        self.assertEqual(len(signals['start_trial'].values), 1)
+        metadata = timer.results.metadata_for(1)
+        self.assertEqual(metadata.gaze_position, (1919, 540))
+        self.assertEqual(metadata.flicker_side, 'right')
+        self.assertEqual(metadata.gaze_point_source, 'history')
+
+    def test_nogaze_flickers_target_side_while_recording_opposite_gaze(self):
+        for target_index, measured, expected_side in ((3, (100, 100), 'right'),
+                                                       (0, (1500, 300), 'left'),
+                                                       (3, None, 'right')):
+            with self.subTest(target_index=target_index), tempfile.TemporaryDirectory() as directory:
+                path = Path(directory) / 'results.csv'
+                timer, signals = self.make_timer(path)
+                timer.nogaze = True
+                timer.target_indexes = [target_index]
+                timer.gaze_tracker = GazePointProvider(Mock(get_current_position=Mock(return_value=measured)))
+                timer.pause_duration = timer.cue_duration = timer.gaze_duration = 0
+                def submit_trial(*values):
+                    signals['start_trial'].values.append(values)
+                    values[4].set()
+                    timer.stop()
+                signals['start_trial'].emit = submit_trial
+                timer.start()
+                timer.join(timeout=.5)
+                timer.stop()
+                timer.join(timeout=.5)
+                self.assertFalse(timer.is_alive())
+                self.assertEqual(len(signals['start_trial'].values), 1)
+                active = signals['start_trial'].values[0][0]
+                expected, _ = partition_visual_objects(timer.targets, timer.visual_objects, expected_side)
+                self.assertEqual([obj.name for obj in active], [obj.name for obj in expected])
+                metadata = timer.results.metadata_for(1)
+                self.assertEqual(metadata.gaze_position, (0, 0) if measured is None else measured)
+                self.assertNotEqual(metadata.gaze_side, expected_side)
+                self.assertEqual(metadata.flicker_side, expected_side)
+                self.assertEqual(metadata.region_source, 'target')
+                timer.on_prediction(PredictionResult(1, 375, np.ones(3), 0, 15.0))
+                with path.open(encoding='utf-8') as stream:
+                    row = next(csv.DictReader(stream))
+                self.assertEqual(row['predicted_target_index'], str(target_index))
+                self.assertEqual(row['correct'], 'True')
+                self.assertEqual(row['gaze_side_correct'], 'False')
+                self.assertEqual(row['flicker_side'], expected_side)
 
     def test_offscreen_api_gaze_still_starts_flicker_on_corresponding_side(self):
         for point, side in (((-.1, 1.2), 'left'), ((1.1, -.2), 'right')):

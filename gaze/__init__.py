@@ -1,4 +1,4 @@
-"""Mouse-backed gaze sampling and coordinate helpers."""
+"""Gaze sampling, retained display points and coordinate helpers."""
 
 from __future__ import annotations
 
@@ -93,3 +93,32 @@ class GazeTracker(threading.Thread):
     def last_error(self) -> str | None:
         with self._lock:
             return self._last_error
+
+
+class GazePointProvider:
+    """Keep a display point while preserving whether a fresh measurement exists."""
+
+    def __init__(self, source=None, *, window_size=(1920, 1080)):
+        self.source = source
+        self.window_size = tuple(window_size)
+        self._lock = threading.Lock()
+        self._position = (0, 0)
+        self.has_measurement = False
+        self.current_is_valid = False
+
+    def get_current_measurement(self) -> tuple[int, int] | None:
+        with self._lock:
+            point = None if self.source is None else self.source.get_current_position()
+            self.current_is_valid = point is not None
+            if point is not None:
+                self._position = tuple(point)
+                self.has_measurement = True
+            return point
+
+    def get_current_position(self) -> tuple[int, int]:
+        self.get_current_measurement()
+        with self._lock:
+            return self._position
+
+    def region_for(self, position: tuple[int, int]) -> Region:
+        return gaze_region(position, self.window_size[0])

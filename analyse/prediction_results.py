@@ -7,6 +7,7 @@ import json
 import math
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Literal
 
 from analyse.test_four import PredictionResult
 from experiment import TargetSpec
@@ -19,6 +20,9 @@ class TrialMetadata:
     actual_index: int
     gaze_position: tuple[int, int]
     gaze_side: Region
+    flicker_side: Region
+    region_source: Literal["gaze", "target"]
+    gaze_point_source: Literal["measurement", "history", "default"]
 
 
 class PredictionResultRecorder:
@@ -43,6 +47,9 @@ class PredictionResultRecorder:
         "predicted_target_name",
         "correct",
         "scores",
+        "flicker_side",
+        "region_source",
+        "gaze_point_source",
     )
 
     def __init__(
@@ -59,12 +66,19 @@ class PredictionResultRecorder:
         actual_index: int,
         gaze_position: tuple[int, int],
         gaze_side: Region,
+        *,
+        flicker_side: Region | None = None,
+        region_source: Literal["gaze", "target"] = "gaze",
+        gaze_point_source: Literal["measurement", "history", "default"] = "measurement",
     ) -> TrialMetadata:
         metadata = TrialMetadata(
             segment_index,
             actual_index,
             (int(gaze_position[0]), int(gaze_position[1])),
             gaze_side,
+            gaze_side if flicker_side is None else flicker_side,
+            region_source,
+            gaze_point_source,
         )
         self._metadata[segment_index] = metadata
         return metadata
@@ -93,7 +107,7 @@ class PredictionResultRecorder:
             return
 
         predicted_index = self.resolve_target_index(
-            prediction.prediction_frequency, metadata.gaze_side
+            prediction.prediction_frequency, metadata.flicker_side
         )
         actual = self.targets[metadata.actual_index]
         predicted = self.targets[predicted_index]
@@ -119,6 +133,9 @@ class PredictionResultRecorder:
             "predicted_target_name": predicted.name,
             "correct": correct,
             "scores": json.dumps(prediction.scores.tolist()),
+            "flicker_side": metadata.flicker_side,
+            "region_source": metadata.region_source,
+            "gaze_point_source": metadata.gaze_point_source,
         }
         self._append(row)
         self._outcomes[prediction.segment_index] = correct
