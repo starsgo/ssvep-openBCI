@@ -26,6 +26,7 @@ class StartScreen:
         self.preview.pack(pady=12)
         self.status = tk.Label(self.root, text="未连接眼动程序", background="#f8fafc",
                                foreground="#475569", font=("Microsoft YaHei", 10))
+        self.status.configure(wraplength=470)
         self.status.pack(pady=4)
         row = tk.Frame(self.root, background="#f8fafc")
         row.pack(pady=12)
@@ -37,7 +38,7 @@ class StartScreen:
                                       font=("Microsoft YaHei", 13), width=13, height=2,
                                       state="disabled" if self.source == "api" else "normal")
         self.start_button.pack(side=tk.LEFT, padx=8)
-        tk.Label(self.root, text="眼动程序需先启动坐标服务；红十字表示实时注视位置。", background="#f8fafc",
+        tk.Label(self.root, text="眼动程序：视线估计 → 提供注视；这里再点击获取注视。", background="#f8fafc",
                  foreground="#64748b", font=("Microsoft YaHei", 9)).pack()
         self.root.protocol("WM_DELETE_WINDOW", self.cancel)
         self.root.bind("<Escape>", lambda event: self.cancel())
@@ -58,7 +59,11 @@ class StartScreen:
             position = self.tracker.get_current_position()
             self.preview.delete("gaze")
             if position is None:
-                self.status.configure(text="等待有效注视坐标，请检查眼动程序是否运行")
+                if self.tracker.api_connected:
+                    detail = self.tracker.last_error or "尚未收到有效样本"
+                    self.status.configure(text=f"眼动已连接，当前坐标无效：{detail}")
+                else:
+                    self.status.configure(text="未连接眼动服务：请在眼动程序的视线估计中点击“提供注视”")
                 self.start_button.configure(state="disabled")
             else:
                 x = position[0] / self.tracker.window_size[0] * 440

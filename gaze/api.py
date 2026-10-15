@@ -31,6 +31,7 @@ class ApiGazeTracker(GazeTracker):
         self._sample_received_at = None
         self._sample_age_at_receipt = None
         self.frame_id = None
+        self.api_connected = False
 
     def _invalidate(self, reason):
         with self._lock:
@@ -45,6 +46,7 @@ class ApiGazeTracker(GazeTracker):
                 raise ValueError("unsupported gaze API schema")
             if payload.get("coordinate_space") != "normalized_top_left":
                 raise ValueError("unsupported gaze coordinate space")
+            self.api_connected = True
             if payload.get("valid") is not True:
                 raise ValueError(str(payload.get("reason", "invalid gaze sample")))
             u, v, age_ms = (float(payload[key]) for key in ("u", "v", "age_ms"))
@@ -99,6 +101,7 @@ class ApiGazeTracker(GazeTracker):
                     self.update_from_api(json.loads(body), received_at=now,
                                          request_elapsed=now - started_at)
                 except (OSError, ValueError, http.client.HTTPException) as error:
+                    self.api_connected = False
                     self._invalidate(f"{type(error).__name__}: {error}")
                     if connection is not None:
                         connection.close()

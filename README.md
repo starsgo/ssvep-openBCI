@@ -139,15 +139,15 @@ analyse/realtime_results/
 
 ## 七鑫实时眼动输入
 
-默认使用真实眼动 API。接入七鑫时，先在眼动项目中完成当前眼镜的标定，关闭占用眼镜的预览/验证窗口，然后启动坐标 API：
+默认使用真实眼动 API。先运行眼动程序，选择七鑫，进入“视线估计”，点击“提供注视”。已有标定直接复用，窗口会自动最小化并持续提供坐标，无需重新标定或另开相机进程：
 
 ```powershell
 cd D:\documents\slippage\slippage
 conda activate slippage
-python gaze_api.py
+python main.py
 ```
 
-另开终端启动本项目：
+眼动程序最小化后保持运行。另开终端启动本项目：
 
 ```powershell
 cd D:\documents\vibe4

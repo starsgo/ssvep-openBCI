@@ -70,6 +70,7 @@ class StartScreenTests(unittest.TestCase):
             screen = self.make_screen(stack)
             screen.tracker = Mock()
             screen.tracker.get_current_position.return_value = None
+            screen.tracker.api_connected = False
             screen._poll_gaze()
             screen.preview.delete.assert_called_with('gaze')
             screen.preview.create_line.assert_not_called()
