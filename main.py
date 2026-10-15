@@ -93,6 +93,21 @@ class TimerThread(threading.Thread):
     def _wait(self, seconds: float) -> bool:
         return not self._stop_event.wait(max(0.0, seconds))
 
+    def _collect_gaze(self) -> tuple[int, int] | None:
+        """Keep the latest measured point seen during this target's gaze phase."""
+        deadline = time.monotonic() + max(0.0, self.gaze_duration)
+        position = None
+        while self.running:
+            current = self.gaze_tracker.get_current_position()
+            if current is not None:
+                position = current
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                return position
+            if not self._wait(min(0.01, remaining)):
+                break
+        return None
+
     def _register_trial_metadata(
         self,
         segment_index: int,
@@ -185,18 +200,26 @@ class TimerThread(threading.Thread):
             if not self._wait(self.cue_duration):
                 break
 
-            # Gaze: remove the text, show the target point, and sample at the end.
+            # Gaze: continuously collect measurements during the 0.5 s phase.
             cue_x, cue_y = self.targets[target_index].center
             self.adder.set_prompt_text.emit(None)
             self.adder.add_visual_point.emit(cue_x, cue_y)
-            if not self._wait(self.gaze_duration):
+            position = self._collect_gaze()
+            if not self.running:
                 break
-
-            position = self.gaze_tracker.get_current_position()
             if position is None:
-                # API measurements can be invalid or stale at the 0.5 s deadline.
-                # Repeat this target instead of starting EEG flicker with old gaze.
-                self.adder.delete_visual_point.emit()
+                # Keep this target visible until a measured coordinate arrives;
+                # do not restart the rest/cue phases on every missing sample.
+                reason = getattr(self.gaze_tracker, 'last_error', None) or '尚无新的注视坐标'
+                self.adder.set_status_text.emit('等待眼动坐标')
+                print(f'[gaze] 等待坐标，目标 {target_index}: {reason}', flush=True)
+                while self.running and self.serial.status != 's' and position is None:
+                    if not self._wait(0.01):
+                        break
+                    position = self.gaze_tracker.get_current_position()
+                if not self.running:
+                    break
+            if position is None or self.serial.status == 's':
                 continue
 
             region = self.gaze_tracker.region_for(position)

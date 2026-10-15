@@ -4,6 +4,7 @@ import tempfile
 import threading
 import time
 import unittest
+from unittest.mock import Mock, patch
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -185,6 +186,44 @@ class ExperimentFlowTests(unittest.TestCase):
             [obj.name for obj in inactive],
             ["visualObj[0]", "visualObj[1]", "visualObj[2]"],
         )
+
+    def test_gaze_phase_keeps_latest_point_when_deadline_frame_is_missing(self):
+        timer, _ = self.make_timer()
+        timer.gaze_duration = .02
+        timer.gaze_tracker.get_current_position = Mock(side_effect=[(10, 20), (1500, 300), None])
+        clock = [0.]
+        def advance(seconds):
+            clock[0] += seconds
+            return True
+        with patch('main.time.monotonic', side_effect=lambda: clock[0]), \
+             patch.object(timer, '_wait', side_effect=advance):
+            self.assertEqual(timer._collect_gaze(), (1500, 300))
+            self.assertAlmostEqual(clock[0], .02)
+            timer.gaze_tracker.get_current_position = Mock(return_value=None)
+            self.assertIsNone(timer._collect_gaze())
+
+    def test_missing_gaze_waits_for_data_without_restarting_target_then_flickers(self):
+        timer, signals = self.make_timer()
+        timer.pause_duration = timer.cue_duration = timer.gaze_duration = 0
+        timer.blink_duration = 0
+        timer.gaze_tracker.ready_event = threading.Event()
+        timer.gaze_tracker.ready_event.set()
+        timer.gaze_tracker.get_current_position = Mock(side_effect=[None, None, (1919, 0)])
+        timer.gaze_tracker.last_error = 'no_measurement'
+        def submit_trial(*values):
+            signals['start_trial'].values.append(values)
+            values[4].set()
+            timer.stop()
+        signals['start_trial'].emit = submit_trial
+        timer.start()
+        timer.join(timeout=.5)
+        timer.stop()
+        timer.join(timeout=.5)
+        self.assertFalse(timer.is_alive())
+        self.assertEqual(len(signals['add_visual_point'].values), 1)
+        self.assertEqual(len(signals['start_trial'].values), 1)
+        self.assertEqual(timer.results.metadata_for(1).gaze_side, 'right')
+        self.assertIn(('等待眼动坐标',), signals['set_status_text'].values)
 
     def test_offscreen_api_gaze_still_starts_flicker_on_corresponding_side(self):
         for point, side in (((-.1, 1.2), 'left'), ((1.1, -.2), 'right')):
