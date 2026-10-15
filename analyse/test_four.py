@@ -35,6 +35,7 @@ class PredictionResult:
     scores: np.ndarray
     prediction_index: int
     prediction_frequency: float
+    target_frequencies: tuple[float, ...] = ()
 
 
 def parse_eeg_line(line: str) -> Optional[np.ndarray]:
@@ -136,6 +137,7 @@ class BlinkSegmentProcessor(threading.Thread):
         start_at_end: bool = True,
         output_dir: str | Path | None = None,
         channel_count: int = 8,
+        candidate_frequencies: Optional[Callable[[int], Sequence[float]]] = None,
     ) -> None:
         super().__init__(daemon=True)
         if channel_count not in SUPPORTED_CHANNEL_COUNTS:
@@ -144,6 +146,7 @@ class BlinkSegmentProcessor(threading.Thread):
         self.on_segment = on_segment
         self.on_prediction = on_prediction
         self.target_frequencies = np.asarray(target_frequencies, dtype=float)
+        self.candidate_frequencies = candidate_frequencies
         self.channel_count = channel_count
         if self.target_frequencies.ndim != 1 or self.target_frequencies.size < 1:
             raise ValueError("at least one target frequency is required")
@@ -204,11 +207,20 @@ class BlinkSegmentProcessor(threading.Thread):
 
     def _process_current_segment(self, segment_index: int) -> None:
         try:
+            frequencies = np.asarray(self.target_frequencies if self.candidate_frequencies is None
+                                     else self.candidate_frequencies(segment_index), dtype=float)
+            if frequencies.ndim != 1 or frequencies.size == 0:
+                raise ValueError('No candidate frequencies for this flashing region')
+            if not np.all(np.isfinite(frequencies)) or np.any(frequencies <= 0):
+                raise ValueError('Candidate frequencies must be finite and positive')
+            if not np.all(np.any(np.isclose(frequencies[:, None], self.target_frequencies,
+                                          rtol=0., atol=1e-9), axis=1)):
+                raise ValueError('Candidate frequencies are not configured targets')
             processed = process_blink_segment(
                 self._samples, channel_count=self.channel_count
             )
             classified: ClassificationResult = classify_segment(
-                processed, self.target_frequencies, fs=SAMPLE_RATE
+                processed, frequencies, fs=SAMPLE_RATE
             )
         except Exception as error:
             self.log(f"Skipped blink segment {segment_index}: {type(error).__name__}: {error}")
@@ -220,6 +232,7 @@ class BlinkSegmentProcessor(threading.Thread):
             scores=classified.scores,
             prediction_index=classified.prediction_index,
             prediction_frequency=classified.prediction_frequency,
+            target_frequencies=tuple(float(value) for value in frequencies),
         )
         self._processed_segments.append(processed)
         self._predictions.append(prediction)
@@ -252,13 +265,25 @@ class BlinkSegmentProcessor(threading.Thread):
             self.output_dir / "eeg_channel_counts.npy",
             np.asarray([segment.shape[0] for segment in self._processed_segments]),
         )
-        np.save(
-            self.output_dir / "fbcca_scores.npy",
-            np.stack([prediction.scores for prediction in self._predictions]),
-        )
+        # Regions may contain different numbers of targets. Keep a rectangular
+        # global frequency axis; NaN explicitly marks candidates not evaluated.
+        scores = np.full((len(self._predictions), len(self.target_frequencies)), np.nan,
+                         dtype=np.float32)
+        global_indexes = []
+        for row, prediction in enumerate(self._predictions):
+            frequencies = prediction.target_frequencies or tuple(self.target_frequencies)
+            columns = [int(np.flatnonzero(np.isclose(self.target_frequencies, frequency,
+                                                    rtol=0., atol=1e-9))[0])
+                       for frequency in frequencies]
+            scores[row, columns] = prediction.scores
+            global_indexes.append(int(np.flatnonzero(np.isclose(
+                self.target_frequencies, prediction.prediction_frequency, rtol=0., atol=1e-9
+            ))[0]))
+        np.save(self.output_dir / 'fbcca_scores.npy', scores)
+        np.save(self.output_dir / 'fbcca_target_frequencies.npy', self.target_frequencies)
         np.save(
             self.output_dir / "fbcca_prediction_indexes.npy",
-            np.asarray([prediction.prediction_index for prediction in self._predictions]),
+            np.asarray(global_indexes),
         )
         np.save(
             self.output_dir / "fbcca_prediction_frequencies.npy",
@@ -278,20 +303,22 @@ class BlinkSegmentProcessor(threading.Thread):
                     "scores",
                     "prediction_index",
                     "prediction_frequency_hz",
+                    "prediction_global_index",
                 ),
             )
             writer.writeheader()
-            for prediction in self._predictions:
+            for index, prediction in enumerate(self._predictions):
                 writer.writerow(
                     {
                         "segment_index": prediction.segment_index,
                         "sample_count": prediction.sample_count,
                         "target_frequencies_hz": json.dumps(
-                            self.target_frequencies.tolist()
+                            list(prediction.target_frequencies or tuple(self.target_frequencies))
                         ),
                         "scores": json.dumps(prediction.scores.tolist()),
                         "prediction_index": prediction.prediction_index,
                         "prediction_frequency_hz": prediction.prediction_frequency,
+                        "prediction_global_index": global_indexes[index],
                     }
                 )
 
@@ -300,6 +327,7 @@ class BlinkSegmentProcessor(threading.Thread):
             f"Processed blink segment {latest.segment_index}: "
             f"shape={self._processed_segments[-1].shape}; "
             f"FBCCA scores={latest.scores.tolist()}; "
+            f"candidates={list(latest.target_frequencies)}; "
             f"prediction={latest.prediction_frequency:g} Hz"
         )
 

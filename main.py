@@ -15,7 +15,7 @@ from experiment import (
     load_targets,
     unique_target_frequencies,
 )
-from gaze import GazePointProvider, GazeTracker, Region
+from gaze import GazePointProvider, GazeTracker, Region, gaze_region
 from ui.start_screen import show_start_screen
 from mySerial import SerialReader
 from ui.display_psy import (
@@ -73,6 +73,8 @@ class TimerThread(threading.Thread):
         self.serial = serial
         self.gaze_tracker = gaze_tracker
         self.targets = targets
+        self.three_regions = any(target.screen == "bottom" or target.region_layout == 'three_sectors'
+                                 for target in targets)
         self.visual_objects = visual_objects
         self.target_indexes = target_indexes
         self.render_ready = render_ready
@@ -150,6 +152,15 @@ class TimerThread(threading.Thread):
                     )
                 )
 
+    def classification_frequencies(self, segment_index: int) -> tuple[float, ...]:
+        """Return the candidates for this segment's recorded flashing region."""
+        with self._prediction_lock:
+            metadata = self.results.metadata_for(segment_index)
+            if metadata is None:
+                raise ValueError(f'No flashing region registered for segment {segment_index}')
+            return tuple(dict.fromkeys(target.frequency_hz for target in self.targets
+                                       if target.screen == metadata.flicker_side))
+
     def _begin_rest(self, segment_index: int | None) -> None:
         self.adder.set_static_targets.emit(self.visual_objects)
         self.adder.delete_visual_point.emit()
@@ -181,6 +192,7 @@ class TimerThread(threading.Thread):
         if not self.running:
             return
         trial_count = 0
+        target_count = 0
         stopped_scene_shown = False
         while self.running:
             if self.serial.status == "s":
@@ -195,17 +207,19 @@ class TimerThread(threading.Thread):
                 continue
             stopped_scene_shown = False
 
-            # Rest: all targets black; asynchronously show the preceding result.
+            # Rest: show configured resting colors and the preceding result.
             preceding_segment = trial_count if trial_count > 0 else None
             self._begin_rest(preceding_segment)
             if not self._wait(self.pause_duration):
                 break
             self._end_rest()
 
-            # Prompt: keep all targets black and show the requested object INDEX.
-            target_index = self.target_indexes[trial_count % len(self.target_indexes)]
+            # Prompt: retain resting colors and show the stable target label.
+            target_index = self.target_indexes[target_count % len(self.target_indexes)]
+            target_label = self.targets[target_index].label
+            target_label = target_index if target_label is None else target_label
             self.adder.set_static_targets.emit(self.visual_objects)
-            self.adder.set_prompt_text.emit(f"注视目标{target_index}")
+            self.adder.set_prompt_text.emit(f"注视目标{target_label}")
             if not self._wait(self.cue_duration):
                 break
 
@@ -228,16 +242,25 @@ class TimerThread(threading.Thread):
             if self.serial.status == 's':
                 continue
 
-            gaze_side = self.gaze_tracker.region_for(position)
+            if self.three_regions:
+                width, height = getattr(self.gaze_tracker, 'window_size', WINDOW_SIZE)
+                gaze_side = gaze_region(position, width, height)
+            else:
+                gaze_side = self.gaze_tracker.region_for(position)
             region = self.targets[target_index].screen if self.nogaze else gaze_side
+            active_objects, inactive_objects = partition_visual_objects(
+                self.targets, self.visual_objects, region
+            )
+            if not active_objects:
+                self.adder.delete_visual_point.emit()
+                self.adder.set_status_text.emit('该区域无目标，跳过闪烁')
+                target_count += 1
+                continue
             segment_index = trial_count + 1
             self._register_trial_metadata(
                 segment_index, target_index, position, gaze_side,
                 flicker_side=region, region_source="target" if self.nogaze else "gaze",
                 gaze_point_source=gaze_point_source,
-            )
-            active_objects, inactive_objects = partition_visual_objects(
-                self.targets, self.visual_objects, region
             )
             self.adder.delete_visual_point.emit()
             self.adder.set_status_text.emit(None)
@@ -257,6 +280,7 @@ class TimerThread(threading.Thread):
             if not self.running:
                 break
             trial_count += 1
+            target_count += 1
 
     def stop(self) -> None:
         self._stop_event.set()
@@ -297,13 +321,13 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--ar-green",
         action="store_true",
-        help="flicker rectangle targets using only the green channel",
+        help="override target colors with green-channel flicker",
     )
     parser.add_argument("--gaze-source", choices=("mouse", "api"), default="api",
                         help="use mouse simulation or measured coordinates from the eye API")
     parser.add_argument("--gaze-api-url", default="http://127.0.0.1:8765/gaze")
     parser.add_argument("--nogaze", action="store_true",
-                        help="select flicker side from the target; keep gaze input and display")
+                        help="select flicker region from the target; keep gaze input and display")
     args = parser.parse_args(argv)
     selection = show_start_screen(args.gaze_source, args.gaze_api_url)
     if selection is None:
@@ -325,10 +349,12 @@ def run_experiment(args) -> int:
 
     targets = load_targets(CONFIG_FILE, window_size=WINDOW_SIZE)
     target_indexes = generate_target_indexes(len(targets), count=40)
-    # Left and right screen targets may reuse the same frequencies. The UI keeps
-    # every object, while FBCCA only needs one score per distinct frequency.
+    # The global frequency axis aligns exported scores. Each segment receives
+    # only the candidates belonging to its actual flashing region.
     target_frequencies = unique_target_frequencies(targets)
-    print(f"INDEX: {target_indexes}")
+    target_labels = [targets[index].label if targets[index].label is not None else index
+                     for index in target_indexes]
+    print(f"INDEX: {target_labels}")
     print(f"Classifier channels: {channel_count}")
     print(f"Target color mode: {'green' if args.ar_green else 'gray'}")
 
@@ -336,7 +362,7 @@ def run_experiment(args) -> int:
     serial_reader = SerialReader("COM3", 115200, output_file)
     serial_reader.start()
     Path(f"labels_{output_file}").write_text(
-        "".join(f"{index}\n" for index in target_indexes), encoding="utf-8"
+        "".join(f"{label}\n" for label in target_labels), encoding="utf-8"
     )
 
     window = display(
@@ -344,6 +370,8 @@ def run_experiment(args) -> int:
         size=WINDOW_SIZE,
         fullscr=True,
         screen=0,
+        region_guides=any(target.screen == "bottom" or target.region_layout == 'three_sectors'
+                          for target in targets),
     )
     adder = ObjAdder()
     adder.add_obj.connect(window.add_visual_obj)
@@ -392,6 +420,7 @@ def run_experiment(args) -> int:
         target_frequencies=target_frequencies,
         on_prediction=timer.on_prediction,
         channel_count=channel_count,
+        candidate_frequencies=timer.classification_frequencies,
     )
     segment_processor.start()
     input_thread = InputThread(serial_reader, on_exit=adder.close_requested.emit)

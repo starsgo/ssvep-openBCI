@@ -7,7 +7,7 @@ Vibe2 是一个用于 SSVEP 脑电实验的 Python 项目。项目包含三个�
 - 实时分析：按 `blink -> pause` 标记切分每段最多 1.5 秒（375 点）的数据，并使用 FBCCA 预测当前注视频率。
 - 实时眼动输入：通过 API 获取真实注视坐标，红十字实时显示，并按眼动阶段末的注视侧选择闪烁目标；鼠标模式可用于显式调试。
 
-当前左右半屏各配置一组 `15 Hz`、`12 Hz`、`10 Hz` 目标。不同目标可以复用频率；FBCCA 会按 `object.json` 首次出现的顺序对频率去重。
+当前屏幕由中心连向顶边中点、左下角、右下角的三条细线分为左上、右上、下方三个区域。每区默认配置 `15 Hz`、`12 Hz`、`10 Hz` 目标，共 9 个；每段脑电只在实际闪烁区域现有目标的频率集合中分类，不使用其他区域的候选频率。
 
 ## 项目结构
 
@@ -65,12 +65,12 @@ python -s main.py
 
 - `SerialReader('COM5', 115200, output_file)`：串口号和波特率。
 - `output_file = 'test_0_ssvep.txt'`：串口原始输出文件名。
-- `object.json`：每个目标显式配置 `screen`（`left` 或 `right`）、左上角坐标、尺寸和 `frequency_hz`；目标名称与数组 INDEX 均从 0 开始，分类频率则按首次出现顺序去重。
+- `object.json`：每个目标配置 `screen`（`left`、`right` 或 `bottom`）、左上角坐标、尺寸、`frequency_hz`、`shape`、`color` 和稳定编号 `label`；根字段 `region_layout: three_sectors` 固定三分区。删除目标时可保留其余目标的原编号，不需要重新排序编号。
 - 默认阶段时长依次为休息 2.5 秒、提示 0.5 秒、眼动 0.5 秒和闪烁 1.5 秒。
 
 实时分类支持 TXT 中每条 `eeg` 记录含 4 个或 8 个数，同一段 `blink -> pause` 内应保持相同通道数。若设备仍输出 8 个数、后 4 个是补零，也可以直接分类。预处理会忽略恒定的补零通道，并处理数值为 `-8388608` 或 `8388607` 的 ADC 饱和采样点；若一段中所有通道都不可用，该段会记录为跳过，不输出预测。当前串口读取器仍按设备原有的 33 字节、8 通道帧格式解析；如果使用不同的 4 通道二进制帧格式，需要另行调整串口解析。
 
-休息、提示和眼动阶段均显示中灰背景与全黑目标。默认 gaze 模式在眼动阶段结束时使用最近的历史有效注视点决定左右闪烁区域，历史不局限于本轮 0.5 秒，从未取得坐标时使用初始点 `(0,0)`；加 `--nogaze` 时使用本轮目标的 `screen` 配置决定闪烁区域。上一段预测会在休息阶段以 `predit:<频率>Hz 左边/右边` 显示。系统按预测频率与实际闪烁侧反查目标 INDEX，并将其与实际 INDEX 的逐轮比较保存到 `record/<运行时间>/prediction_results.csv`。
+休息、提示和眼动阶段显示中灰背景、目标配置的静止颜色及数字编号；闪烁阶段隐藏全部目标数字，结束后恢复。默认 gaze 模式在眼动阶段结束时使用最近的历史有效注视点决定左上、右上或下方闪烁区域，历史不局限于本轮 0.5 秒，从未取得坐标时使用初始点 `(0,0)`；加 `--nogaze` 时使用本轮目标的 `screen` 配置决定闪烁区域。上一段预测会在休息阶段以 `predit:<频率>Hz 左边/右边/下方` 显示。系统按预测频率与实际闪烁侧反查目标 INDEX，并将其与实际 INDEX 的逐轮比较保存到 `record/<运行时间>/prediction_results.csv`。
 
 终端输入串口命令：
 
@@ -124,8 +124,9 @@ analyse/realtime_results/
 - `runtime.log`：处理日志。
 - `eeg_segments.npy`：每个 blink 区间预处理后的 EEG 数据。
 - `eeg_channel_counts.npy`：每段 TXT 记录中的通道数；同一次运行混合 4/8 通道时，`eeg_segments.npy` 会将 4 通道段补零到 8 通道，以便保存为统一数组。
-- `fbcca_scores.npy`：每个区间在四个目标频率上的 FBCCA 分数。
-- `fbcca_prediction_indexes.npy`：预测频率在 `TARGET_FREQS` 中的索引。
+- `fbcca_scores.npy`：每段在本次配置全局频率轴上的 FBCCA 分数；未参与本段分类的频率列为 `NaN`。
+- `fbcca_target_frequencies.npy`：上述全局频率轴，不能固定假定列顺序或频率数量。
+- `fbcca_prediction_indexes.npy`：预测频率在 `fbcca_target_frequencies.npy` 全局轴上的索引。分类 CSV 中的 `prediction_index` 则是该段候选列表的局部索引，并另存 `prediction_global_index`。
 - `fbcca_prediction_frequencies.npy`：预测出的实际频率，单位 Hz。
 - `classification_results.csv`：逐段采样点数、各目标分数和最终预测，便于直接检查。
 - `eeg_trials.npy`、`eeg_labels.npy`、`*.mat`：凑齐完整频率 block 后生成的汇总数据。
@@ -170,3 +171,20 @@ python -s main.py --nogaze
 `--nogaze` 仅改变闪烁侧选择，仍可点击“获取注视”，接收 API 并显示红十字。例如目标在右侧，即使注视点为 `(0,0)` 或处于左侧，也闪烁右侧；不加参数则按注视点判侧。可与 `--four`、`--ar-green` 组合使用。
 
 结果 CSV 保留 `gaze_x,gaze_y,gaze_side`，新增 `flicker_side`、`region_source`（`gaze`/`target`）和 `gaze_point_source`（`measurement`/`history`/`default`），分别记录实际闪烁侧、判侧方式和坐标来源。分类目标反查、正确率和结果显示使用实际闪烁侧，避免将目标侧误记成测量注视侧。初始 `(0,0)` 是实验的默认点，不伪装成 API 测量帧。
+
+
+## 三分区目标样式与删除目标
+
+`object.json` 的 `region_layout` 为 `three_sectors`：从屏幕中心连向顶边中点和两个下角，将屏幕划为左上（`left`）、右上（`right`）、下方（`bottom`）。下方区域在线边界上优先，中心以上的竖线边界归右侧；不再仅按横坐标中线判断三区。
+
+默认每区三个目标的中心均匀排列：左上编号 0–2，右上 3–5，下方 6–8。2、4、6 为暗红等边三角形，分别是 10、12、15 Hz，颜色 `#8B0000`，即 RGB `(139,0,0)`；其余为黑色正方形。几何图形在原包围框内居中，三角形保持等边比例，不拉伸为等腰三角形。
+
+配置字段：`shape` 支持 `square`、`triangle`，并兼容原 `rectangle`；`color` 使用 `#RRGGBB`；`label` 为显示及结果使用的稳定编号。三角形从暗红色平滑变化到白色，方形保持黑白闪烁，频率及时序公式不变。目标数字只在非闪烁阶段显示。显式 `--ar-green` 保留原绿色覆盖模式，目标仍保持各自形状。
+
+可以删除任意目标条目，保留剩余条目的 `name`、`label` 和 `frequency_hz`，保存后重启程序生效；不要求每区恰好三个，也不要求编号连续。每个区域内频率必须唯一，目标名称和显示编号也必须唯一。若删空某个区域，仍保留三条分界线；gaze 指向该空区时跳过闪烁，不回退到其他区域分类。至少需要一个目标。
+
+例如右上区域删除 12 Hz 目标后，该区域只以剩余 15、10 Hz 作为 FBCCA 候选，即使其他区域还存在 12 Hz，也不会将其作为本段候选。候选集合按每段已登记的实际闪烁区域读取，延迟返回的分类不会误用下一轮区域。`--nogaze` 仍按目标区域闪烁，并使用该实际区域的候选集合。
+
+删除中间目标后，提示文字及结果中的 `actual_index`、`predicted_target_index` 优先使用稳定的 `label`；没有 `label` 的旧配置沿用数组索引。新增 `actual_config_index`、`predicted_config_index` 保存内部数组位置。结果仍按“实际区域 + 预测频率”反查配置中存在的目标，不用局部频率索引直接当目标编号。
+
+`classification_results.csv` 每段记录自己的 `target_frequencies_hz` 和候选分数；候选数可为 1、2、3 或更多，不会因分数长度不同而堆叠失败。`fbcca_scores.npy` 用全局频率轴对齐，未计算列为 `NaN`，读取时须结合 `fbcca_target_frequencies.npy`。

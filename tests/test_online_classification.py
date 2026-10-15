@@ -1,7 +1,9 @@
 import csv
+import json
 import io
 import tempfile
 import unittest
+from unittest.mock import patch
 from contextlib import redirect_stdout
 from pathlib import Path
 
@@ -160,6 +162,59 @@ class OnlineClassificationTests(unittest.TestCase):
                 rows = list(csv.DictReader(stream))
             self.assertEqual(len(rows), 1)
             self.assertEqual(rows[0]["prediction_frequency_hz"], "12.0")
+
+    def test_per_segment_candidates_exclude_deleted_frequencies_and_save_variable_lengths(self):
+        candidates = {1: (15., 10.), 2: (12.,), 3: (10., 12., 15.)}
+        predictions = []
+        with tempfile.TemporaryDirectory() as directory:
+            processor = BlinkSegmentProcessor(Path(directory)/'recording.txt',
+                output_dir=directory, target_frequencies=self.frequencies,
+                candidate_frequencies=lambda index: candidates[index],
+                on_prediction=predictions.append)
+            for index, frequency in enumerate((10., 12., 15.), 1):
+                processor._consume_line('[MARKER] blink\n')
+                for sample in self.synthetic_eeg(frequency).T:
+                    processor._consume_line(f"[0.] {{'eeg': {sample.tolist()}}}\n")
+                processor._consume_line('[MARKER] pause\n')
+            self.assertEqual([p.prediction_frequency for p in predictions], [10., 12., 15.])
+            self.assertEqual([p.target_frequencies for p in predictions], list(candidates.values()))
+            self.assertEqual([p.prediction_index for p in predictions], [1, 0, 2])
+            scores = np.load(Path(directory)/'fbcca_scores.npy')
+            self.assertEqual(scores.shape, (3, 3))
+            self.assertTrue(np.isnan(scores[0, 1]))
+            self.assertTrue(np.isnan(scores[1, (0, 2)]).all())
+            self.assertTrue(np.isfinite(scores[2]).all())
+            self.assertEqual(np.load(Path(directory)/'fbcca_prediction_indexes.npy').tolist(), [2, 1, 0])
+            self.assertEqual(np.load(Path(directory)/'fbcca_target_frequencies.npy').tolist(), self.frequencies)
+            with (Path(directory)/'classification_results.csv').open(encoding='utf-8') as stream:
+                rows = list(csv.DictReader(stream))
+            self.assertEqual([json.loads(row['target_frequencies_hz']) for row in rows],
+                             [list(value) for value in candidates.values()])
+
+    def test_outside_region_signal_cannot_select_an_excluded_frequency(self):
+        with tempfile.TemporaryDirectory() as directory:
+            predictions = []
+            processor = BlinkSegmentProcessor(Path(directory)/'recording.txt',
+                output_dir=directory, target_frequencies=self.frequencies,
+                candidate_frequencies=lambda index: (12., 10.), on_prediction=predictions.append)
+            processor._samples = list(self.synthetic_eeg(15.).T)
+            processor._process_current_segment(1)
+            self.assertEqual(len(predictions), 1)
+            self.assertIn(predictions[0].prediction_frequency, (12., 10.))
+            self.assertEqual(predictions[0].scores.shape, (2,))
+
+    def test_missing_or_empty_region_candidates_never_fall_back_to_global_set(self):
+        def missing(index):
+            raise ValueError('Missing region metadata')
+        for callback in (lambda index: (), missing):
+            with self.subTest(callback=callback), tempfile.TemporaryDirectory() as directory:
+                predictions = []
+                processor = BlinkSegmentProcessor(Path(directory)/'recording.txt',
+                    output_dir=directory, candidate_frequencies=callback, on_prediction=predictions.append)
+                with patch('analyse.test_four.classify_segment') as classify:
+                    processor._process_current_segment(1)
+                classify.assert_not_called()
+                self.assertEqual(predictions, [])
 
 
 if __name__ == "__main__":

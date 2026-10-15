@@ -22,6 +22,7 @@ from pathlib import Path
 from typing import Any, Callable, Iterable, Sequence
 
 from gaze import psychopy_to_top_left
+from experiment import color_rgb
 
 
 TAU = 2.0 * math.pi
@@ -49,12 +50,12 @@ def phase_at(elapsed_s: float, frequency_hz: float) -> float:
 
 
 def brightness_at_phase(phase_rad: float) -> float:
-    """Start each flicker cycle at black, then rise toward white."""
+    """Start each flicker cycle at its resting color, then rise to the peak."""
     return 0.5 * (1.0 - math.cos(phase_rad))
 
 
 def format_prediction_text(frequency_hz: float, side: str | None = None) -> str:
-    side_text = {"left": "左边", "right": "右边"}.get(side, "")
+    side_text = {"left": "左边", "right": "右边", "bottom": "下方"}.get(side, "")
     suffix = f" {side_text}" if side_text else ""
     return f"predit:{frequency_hz:g}Hz{suffix}"
 
@@ -82,6 +83,14 @@ def top_left_to_center(
         float(x) + float(width) / 2.0 - float(window_width) / 2.0,
         float(window_height) / 2.0 - (float(y) + float(height) / 2.0),
     )
+
+
+def equilateral_vertices(size: Sequence[float]) -> tuple[tuple[float, float], ...]:
+    """Fit an upright equilateral triangle inside the configured bounding box."""
+    side = min(float(size[0]), 2.0 * float(size[1]) / math.sqrt(3.0))
+    height = math.sqrt(3.0) * side / 2.0
+    return ((0.0, height / 2.0), (-side / 2.0, -height / 2.0),
+            (side / 2.0, -height / 2.0))
 
 
 class _Dispatcher:
@@ -156,7 +165,17 @@ class VisualObj_psy:
     name: str = "visualObj"
     log_blink: bool = False
     color_mode: str = "gray"
+    shape: str = "rectangle"
+    color: str = "#000000"
+    label: str | None = None
     _stim: Any = field(default=None, init=False, repr=False)
+    _label_stim: Any = field(default=None, init=False, repr=False)
+    _base_rgb: tuple[float, float, float] = field(init=False, repr=False)
+
+    def __post_init__(self) -> None:
+        if self.shape not in {"rectangle", "square", "triangle"}:
+            raise ValueError(f"unsupported target shape: {self.shape}")
+        self._base_rgb = tuple(2.0 * value - 1.0 for value in color_rgb(self.color))
 
     def phase(self, elapsed_s: float) -> float:
         return phase_at(elapsed_s, self.blink_frequency)
@@ -172,17 +191,16 @@ class VisualObj_psy:
 
         pos = top_left_to_center(self.position, self.size, win.size)
         if self.image is None:
-            self._stim = visual.Rect(
-                win,
-                width=self.size[0],
-                height=self.size[1],
-                pos=pos,
-                units="pix",
-                lineWidth=0,
-                fillColor=1.0,
-                colorSpace="rgb",
-                autoLog=False,
-            )
+            style = dict(pos=pos, units="pix", lineWidth=0, lineColor=None,
+                         fillColor=self._base_rgb, colorSpace="rgb", autoLog=False)
+            if self.shape == "triangle":
+                self._stim = visual.ShapeStim(win, vertices=equilateral_vertices(self.size),
+                                              closeShape=True, **style)
+            else:
+                width, height = self.size
+                if self.shape == "square":
+                    width = height = min(width, height)
+                self._stim = visual.Rect(win, width=width, height=height, **style)
         else:
             self._stim = visual.ImageStim(
                 win,
@@ -193,24 +211,30 @@ class VisualObj_psy:
                 opacity=1.0,
                 autoLog=False,
             )
+        if self.label is not None:
+            self._label_stim = visual.TextStim(win, text=str(self.label), pos=pos, units="pix",
+                                               height=28, bold=True, color="white", autoLog=False)
 
-    def draw(self, brightness: float) -> None:
+    def draw(self, brightness: float, *, show_label: bool = False) -> None:
         if self._stim is None:
             raise RuntimeError("VisualObj_psy must be attached before drawing")
         brightness = min(1.0, max(0.0, float(brightness)))
         if self.image is None:
             level = 2.0 * brightness - 1.0
             if self.color_mode == "gray":
-                self._stim.fillColor = level
+                self._stim.fillColor = (level if self._base_rgb == (-1.0, -1.0, -1.0) else
+                                        tuple(base + (1.0 - base) * brightness for base in self._base_rgb))
             elif self.color_mode == "green":
                 self._stim.fillColor = (-1.0, level, -1.0)
             else:
                 raise ValueError(f"unsupported target color mode: {self.color_mode}")
         else:
             if self.color_mode != "gray":
-                raise ValueError("green target mode requires rectangle targets")
+                raise ValueError("green target mode requires geometric targets")
             self._stim.opacity = brightness
         self._stim.draw()
+        if show_label and self._label_stim is not None:
+            self._label_stim.draw()
 
 
 @dataclass
@@ -264,11 +288,13 @@ class display_psy:
         warmup_frames: int = 120,
         record_root: str | Path = "record",
         run_id: str | None = None,
+        region_guides: bool = False,
     ) -> None:
         del parent
         from psychopy import event, visual
 
         self._visual = visual
+        self._region_guides = []
         self._background = background
         self._fullscr = fullscr
         self._requested_size = tuple(size)
@@ -318,6 +344,8 @@ class display_psy:
             title=self._title,
             autoLog=False,
         )
+        if region_guides:
+            self.set_region_guides()
         # The mouse is the gaze-point substitute in this experiment. PsychoPy
         # hides it by default for stimulus windows, so explicitly show it.
         try:
@@ -325,6 +353,15 @@ class display_psy:
         except AttributeError:
             pass
         self._mouse = event.Mouse(win=self.win, visible=True)
+
+    def set_region_guides(self) -> None:
+        """Connect the screen center to the top midpoint and lower corners."""
+        width, height = self.win.size
+        self._region_guides = [self._visual.Line(
+            self.win, start=(0, 0), end=end, units="pix", lineWidth=1,
+            lineColor=(0.4, 0.4, 0.4), autoLog=False,
+        ) for end in ((0, height / 2.0), (-width / 2.0, -height / 2.0),
+                      (width / 2.0, -height / 2.0))]
 
     def setWindowTitle(self, title: str) -> None:  # Qt-compatible spelling
         self._title = str(title)
@@ -354,7 +391,7 @@ class display_psy:
         self.visual_objs.clear()
 
     def set_static_targets(self, objects: Iterable[VisualObj_psy]) -> None:
-        """Show all configured targets as black rectangles."""
+        """Show all targets with their configured resting shapes and colors."""
         targets = list(objects)
         for obj in targets:
             if not isinstance(obj, VisualObj_psy):
@@ -503,6 +540,8 @@ class display_psy:
         self._gaze_callback(psychopy_to_top_left(self._mouse.getPos(), self.win.size))
 
     def _draw_cue(self) -> None:
+        for line in getattr(self, '_region_guides', ()):
+            line.draw()
         if self._cue_stim is not None:
             self._cue_stim.draw()
         self._draw_live_gaze()
@@ -518,9 +557,10 @@ class display_psy:
             prompt_stim.draw()
 
     @staticmethod
-    def _draw_black(objects: Iterable[VisualObj_psy]) -> None:
+    def _draw_black(objects: Iterable[VisualObj_psy], *, show_labels: bool = False) -> None:
+        """Draw the zero-brightness resting state (black for legacy targets)."""
         for obj in objects:
-            obj.draw(0.0)
+            obj.draw(0.0, show_label=show_labels)
 
     def _safe_callback(self, callback: Callable[[], Any] | None) -> None:
         if callback is None:
@@ -678,8 +718,8 @@ class display_psy:
 
     def _finish_trial(self, trial: _Trial, *, aborted: bool = False) -> float:
         trial.aborted = aborted
-        self._draw_black(trial.static_objects)
-        self._draw_black(trial.objects)
+        self._draw_black(trial.static_objects, show_labels=True)
+        self._draw_black(trial.objects, show_labels=True)
         self._draw_cue()
         self._draw_status()
         self._draw_prompt()
@@ -735,7 +775,7 @@ class display_psy:
     def _draw_legacy_objects(self, predicted_flip: float) -> None:
         del predicted_flip
         for obj in self.visual_objs:
-            obj.draw(self._static_brightness)
+            obj.draw(self._static_brightness, show_label=True)
         self._draw_cue()
         self._draw_status()
         self._draw_prompt()
@@ -1026,6 +1066,9 @@ def build_visual_objects(
             name=target.name,
             log_blink=True,
             color_mode=color_mode,
+            shape=getattr(target, 'shape', 'rectangle'),
+            color=getattr(target, 'color', '#000000'),
+            label=getattr(target, 'label', None),
         )
         for target in targets
     ]

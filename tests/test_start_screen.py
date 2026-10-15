@@ -114,8 +114,9 @@ class StartScreenTests(unittest.TestCase):
         with ExitStack() as stack, TemporaryDirectory() as directory:
             api_factory = stack.enter_context(patch('ui.start_screen.ApiGazeTracker'))
             mouse_factory = stack.enter_context(patch('main.GazeTracker'))
-            for name in ('SerialReader', 'InputThread', 'BlinkSegmentProcessor', 'ObjAdder'):
+            for name in ('SerialReader', 'InputThread', 'ObjAdder'):
                 stack.enter_context(patch('main.' + name))
+            processor = stack.enter_context(patch('main.BlinkSegmentProcessor'))
             timer = stack.enter_context(patch('main.TimerThread'))
             window = stack.enter_context(patch('main.display')).return_value
             stack.enter_context(patch('main.Path.write_text'))
@@ -132,6 +133,8 @@ class StartScreenTests(unittest.TestCase):
             self.assertIsInstance(point, GazePointProvider)
             self.assertEqual(point.get_current_position(), (0, 0))
             self.assertTrue(timer.call_args.kwargs['nogaze'])
+            self.assertIs(processor.call_args.kwargs['candidate_frequencies'],
+                          timer.return_value.classification_frequencies)
             self.assertEqual(window.set_gaze_provider.call_args.args[0](), (0, 0))
             timer.return_value.stop.assert_called_once()
             window.close.assert_called_once()

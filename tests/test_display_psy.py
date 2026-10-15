@@ -4,7 +4,7 @@ import types
 import unittest
 from collections import defaultdict
 from threading import Event
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 from ui.display_psy import (
     ObjAdder,
@@ -16,10 +16,14 @@ from ui.display_psy import (
     top_left_to_center,
     trial_should_end,
     wrapped_phase_error,
+    equilateral_vertices,
+    format_prediction_text,
 )
 
 
 class PhaseMathTests(unittest.TestCase):
+    def test_prediction_text_accepts_bottom_region(self):
+        self.assertEqual(format_prediction_text(15., 'bottom'), 'predit:15Hz 下方')
     def test_initial_phase_is_zero_and_black(self):
         self.assertEqual(phase_at(0.0, 15.0), 0.0)
         self.assertEqual(brightness_at_phase(0.0), 0.0)
@@ -47,6 +51,73 @@ class PhaseMathTests(unittest.TestCase):
 
 
 class CompatibilityTests(unittest.TestCase):
+    def test_triangle_is_equilateral_and_fits_non_square_bounding_boxes(self):
+        for size in ((200, 200), (200, 80), (100, 300)):
+            with self.subTest(size=size):
+                vertices = equilateral_vertices(size)
+                edges = [math.dist(vertices[index], vertices[(index+1) % 3]) for index in range(3)]
+                self.assertAlmostEqual(edges[0], edges[1])
+                self.assertAlmostEqual(edges[1], edges[2])
+                self.assertTrue(all(abs(x) <= size[0]/2. and abs(y) <= size[1]/2.
+                                    for x, y in vertices))
+
+    def test_triangle_uses_polygon_and_white_number_at_target_center(self):
+        visual = Mock()
+        module = types.ModuleType('psychopy')
+        module.visual = visual
+        obj = VisualObj_psy((483, 410), (200, 200), 10., shape='triangle', color='#8B0000', label='2')
+        win = types.SimpleNamespace(size=(1920, 1080))
+        with patch.dict(sys.modules, {'psychopy': module}):
+            obj.attach(win)
+        visual.Rect.assert_not_called()
+        self.assertEqual(visual.ShapeStim.call_args.kwargs['vertices'], equilateral_vertices((200, 200)))
+        self.assertEqual(visual.ShapeStim.call_args.kwargs['pos'], (-377., 30.))
+        self.assertEqual(visual.TextStim.call_args.kwargs['text'], '2')
+        self.assertEqual(visual.TextStim.call_args.kwargs['pos'], (-377., 30.))
+        self.assertEqual(visual.TextStim.call_args.kwargs['color'], 'white')
+
+    def test_dark_red_triangle_interpolates_to_white_and_returns_to_dark_red(self):
+        obj = VisualObj_psy((0, 0), (200, 200), 10., shape='triangle', color='#8B0000')
+        obj._stim = Mock()
+        red = (139. / 127.5 - 1., -1., -1.)
+        for brightness in (0., .5, 1., 0.):
+            obj.draw(brightness)
+            expected = tuple(base + (1.-base)*brightness for base in red)
+            for actual, wanted in zip(obj._stim.fillColor, expected):
+                self.assertAlmostEqual(actual, wanted)
+
+    def test_labels_appear_outside_flicker_and_hide_for_all_targets_during_flicker(self):
+        objects = [VisualObj_psy((index*220, 0), (200, 200), 10., label=str(index)) for index in range(3)]
+        for obj in objects:
+            obj._stim, obj._label_stim = Mock(), Mock()
+        renderer = display_psy.__new__(display_psy)
+        renderer.win = Mock()
+        renderer.win.flip.side_effect = (1., 1.0167)
+        renderer.visual_objs = objects
+        renderer._static_brightness = 0.
+        renderer._draw_cue = renderer._draw_status = renderer._draw_prompt = Mock()
+        renderer._append_frame_records = Mock()
+        renderer._draw_legacy_objects(0.)
+        self.assertTrue(all(obj._label_stim.draw.call_count == 1 for obj in objects))
+        trial = _Trial(1, objects[:2], 1.5, None, None, None, static_objects=objects[2:])
+        renderer._draw_first_trial_frame(trial)
+        trial.onset_time = 1.
+        renderer._draw_trial_frame(trial, 1.0167)
+        self.assertTrue(all(obj._label_stim.draw.call_count == 1 for obj in objects))
+        renderer._draw_legacy_objects(1.0334)
+        self.assertTrue(all(obj._label_stim.draw.call_count == 2 for obj in objects))
+
+    def test_three_guides_join_center_to_top_midpoint_and_lower_corners(self):
+        renderer = display_psy.__new__(display_psy)
+        renderer.win = types.SimpleNamespace(size=(1920, 1080))
+        renderer._visual = Mock()
+        renderer._visual.Line.side_effect = [Mock(), Mock(), Mock()]
+        renderer.set_region_guides()
+        calls = renderer._visual.Line.call_args_list
+        self.assertEqual([call.kwargs['end'] for call in calls],
+                         [(0, 540.), (-960., -540.), (960., -540.)])
+        self.assertTrue(all(call.kwargs['start'] == (0, 0) and call.kwargs['lineWidth'] == 1
+                            for call in calls))
     def test_escape_leaves_fullscreen_without_closing_renderer(self):
         event_module = types.ModuleType("event")
         event_module.getKeys = lambda **_kwargs: ["escape"]

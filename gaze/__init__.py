@@ -7,12 +7,20 @@ import threading
 from typing import Callable, Literal, Sequence
 
 
-Region = Literal["left", "right"]
+Region = Literal["left", "right", "bottom"]
 
 
-def gaze_region(position: tuple[int, int], window_width: int) -> Region:
+def gaze_region(position: tuple[int, int], window_width: int,
+                window_height: int | None = None) -> Region:
     if window_width <= 0:
         raise ValueError("window_width must be positive")
+    if window_height is not None:
+        if window_height <= 0:
+            raise ValueError("window_height must be positive")
+        x, y = position
+        boundary_y = window_height / 2.0 + window_height / window_width * abs(x - window_width / 2.0)
+        if y >= boundary_y:
+            return "bottom"
     return "left" if position[0] < window_width / 2.0 else "right"
 
 

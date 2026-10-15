@@ -50,6 +50,8 @@ class PredictionResultRecorder:
         "flicker_side",
         "region_source",
         "gaze_point_source",
+        "actual_config_index",
+        "predicted_config_index",
     )
 
     def __init__(
@@ -94,7 +96,7 @@ class PredictionResultRecorder:
             and math.isclose(target.frequency_hz, frequency, rel_tol=0.0, abs_tol=1e-9)
         ]
         if len(matches) != 1:
-            raise ValueError("frequency and gaze side must identify exactly one target")
+            raise ValueError("frequency and flashing region must identify exactly one target")
         return matches[0]
 
     def record(self, prediction: PredictionResult) -> None:
@@ -115,7 +117,7 @@ class PredictionResultRecorder:
         row = {
             "segment_index": prediction.segment_index,
             "sample_count": prediction.sample_count,
-            "actual_index": metadata.actual_index,
+            "actual_index": metadata.actual_index if actual.label is None else actual.label,
             "actual_name": actual.name,
             "actual_side": actual.screen,
             "actual_x": actual.x,
@@ -129,13 +131,15 @@ class PredictionResultRecorder:
             "gaze_side_correct": metadata.gaze_side == actual.screen,
             "predicted_fbcca_index": prediction.prediction_index,
             "predicted_frequency_hz": prediction.prediction_frequency,
-            "predicted_target_index": predicted_index,
+            "predicted_target_index": predicted_index if predicted.label is None else predicted.label,
             "predicted_target_name": predicted.name,
             "correct": correct,
             "scores": json.dumps(prediction.scores.tolist()),
             "flicker_side": metadata.flicker_side,
             "region_source": metadata.region_source,
             "gaze_point_source": metadata.gaze_point_source,
+            "actual_config_index": metadata.actual_index,
+            "predicted_config_index": predicted_index,
         }
         self._append(row)
         self._outcomes[prediction.segment_index] = correct
