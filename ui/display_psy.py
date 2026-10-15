@@ -49,8 +49,8 @@ def phase_at(elapsed_s: float, frequency_hz: float) -> float:
 
 
 def brightness_at_phase(phase_rad: float) -> float:
-    """Map cosine phase to a black-to-white brightness value."""
-    return 0.5 * (1.0 + math.cos(phase_rad))
+    """Start each flicker cycle at black, then rise toward white."""
+    return 0.5 * (1.0 - math.cos(phase_rad))
 
 
 def format_prediction_text(frequency_hz: float, side: str | None = None) -> str:
@@ -155,6 +155,7 @@ class VisualObj_psy:
     image: Any = None
     name: str = "visualObj"
     log_blink: bool = False
+    color_mode: str = "gray"
     _stim: Any = field(default=None, init=False, repr=False)
 
     def phase(self, elapsed_s: float) -> float:
@@ -198,8 +199,16 @@ class VisualObj_psy:
             raise RuntimeError("VisualObj_psy must be attached before drawing")
         brightness = min(1.0, max(0.0, float(brightness)))
         if self.image is None:
-            self._stim.fillColor = 2.0 * brightness - 1.0
+            level = 2.0 * brightness - 1.0
+            if self.color_mode == "gray":
+                self._stim.fillColor = level
+            elif self.color_mode == "green":
+                self._stim.fillColor = (-1.0, level, -1.0)
+            else:
+                raise ValueError(f"unsupported target color mode: {self.color_mode}")
         else:
+            if self.color_mode != "gray":
+                raise ValueError("green target mode requires rectangle targets")
             self._stim.opacity = brightness
         self._stim.draw()
 
@@ -289,6 +298,8 @@ class display_psy:
         self._callback_errors: list[str] = []
         self.ready_event = threading.Event()
         self._gaze_callback: Callable[[tuple[int, int]], Any] | None = None
+        self._gaze_provider = None
+        self._gaze_cross = None
 
         self.run_id = run_id or datetime.now().strftime("%Y%m%d_%H%M%S")
         self.record_dir = Path(record_root) / self.run_id
@@ -353,20 +364,24 @@ class display_psy:
         self._static_brightness = 0.0
 
     def set_status_text(self, text: str | None) -> None:
-        """Set the small status message shown at the bottom of the screen."""
+        """Show prediction results prominently at the bottom of the screen."""
         normalized = None if text is None else str(text).strip()
         self._status_text = normalized or None
         if self._status_text is None:
             self._status_stim = None
             return
         _, window_height = self.win.size
+        is_prediction = (
+            self._status_text.startswith("predit:")
+            and self._status_text != "predit:processing..."
+        )
         self._status_stim = self._visual.TextStim(
             self.win,
             text=self._status_text,
-            pos=(0, -float(window_height) / 2.0 + 28.0),
-            height=18.0,
+            pos=(0, -float(window_height) / 2.0 + (76.0 if is_prediction else 28.0)),
+            height=48.0 if is_prediction else 18.0,
             units="pix",
-            color="white",
+            color="red" if is_prediction else "white",
             autoLog=False,
         )
 
@@ -383,7 +398,7 @@ class display_psy:
                 pos=(0, 0),
                 height=36.0,
                 units="pix",
-                color="white",
+                color="red",
                 autoLog=False,
             )
         )
@@ -455,6 +470,33 @@ class display_psy:
     ) -> None:
         self._gaze_callback = callback
 
+    def set_gaze_provider(self, provider) -> None:
+        """Display the current measured gaze; the target cue remains separate."""
+        self._gaze_provider = provider
+        self._gaze_cross = None
+        if provider is not None:
+            self.win.mouseVisible = False
+            self._mouse.setVisible(False)
+
+    def _draw_live_gaze(self) -> None:
+        provider = getattr(self, "_gaze_provider", None)
+        if provider is None:
+            return
+        position = provider()
+        if position is None:
+            return
+        width, height = self.win.size
+        x, y = float(position[0]) - width / 2., height / 2. - float(position[1])
+        if getattr(self, "_gaze_cross", None) is None:
+            self._gaze_cross = [self._visual.Line(
+                self.win, units="pix", lineColor="red", lineWidth=2, autoLog=False,
+                start=(0, 0), end=(0, 0)) for _ in range(2)]
+        horizontal, vertical = self._gaze_cross
+        horizontal.start, horizontal.end = (x-12, y), (x+12, y)
+        vertical.start, vertical.end = (x, y-12), (x, y+12)
+        horizontal.draw()
+        vertical.draw()
+
     def _publish_mouse_position(self) -> None:
         if self._gaze_callback is None:
             return
@@ -463,6 +505,7 @@ class display_psy:
     def _draw_cue(self) -> None:
         if self._cue_stim is not None:
             self._cue_stim.draw()
+        self._draw_live_gaze()
 
     def _draw_status(self) -> None:
         status_stim = getattr(self, "_status_stim", None)
@@ -591,10 +634,10 @@ class display_psy:
 
     def _draw_first_trial_frame(self, trial: _Trial) -> float:
         phases = [0.0 for _ in trial.objects]
-        brightnesses = [1.0 for _ in trial.objects]
+        brightnesses = [0.0 for _ in trial.objects]
         self._draw_black(trial.static_objects)
         for obj in trial.objects:
-            obj.draw(1.0)
+            obj.draw(0.0)
         self._draw_cue()
         self._draw_status()
         self._draw_prompt()
@@ -970,7 +1013,11 @@ VisualObj = VisualObj_psy
 visualObj = VisualObj_psy
 
 
-def build_visual_objects(targets: Iterable[Any]) -> list[VisualObj_psy]:
+def build_visual_objects(
+    targets: Iterable[Any], *, color_mode: str = "gray"
+) -> list[VisualObj_psy]:
+    if color_mode not in {"gray", "green"}:
+        raise ValueError(f"unsupported target color mode: {color_mode}")
     return [
         VisualObj_psy(
             (target.x, target.y),
@@ -978,6 +1025,7 @@ def build_visual_objects(targets: Iterable[Any]) -> list[VisualObj_psy]:
             target.frequency_hz,
             name=target.name,
             log_blink=True,
+            color_mode=color_mode,
         )
         for target in targets
     ]

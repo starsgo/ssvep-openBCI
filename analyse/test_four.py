@@ -18,7 +18,8 @@ from scipy.signal import butter, filtfilt, iirnotch
 from .fbcca import ClassificationResult, classify_segment
 
 
-NUM_CHANNELS = 8
+SUPPORTED_CHANNEL_COUNTS = (4, 8)
+ADC_LIMITS = (-8388608, 8388607)
 SAMPLE_RATE = 250
 SEGMENT_SECONDS = 1.5
 SEGMENT_SAMPLES = round(SEGMENT_SECONDS * SAMPLE_RATE)
@@ -37,7 +38,7 @@ class PredictionResult:
 
 
 def parse_eeg_line(line: str) -> Optional[np.ndarray]:
-    """Extract the eight EEG channel values from one SerialReader output line."""
+    """Extract four or eight EEG channel values from one recording line."""
     start = line.find("{")
     end = line.rfind("}")
     if start == -1 or end == -1:
@@ -47,15 +48,40 @@ def parse_eeg_line(line: str) -> Optional[np.ndarray]:
         eeg = np.asarray(frame["eeg"], dtype=float)
     except (KeyError, TypeError, ValueError, SyntaxError):
         return None
-    return eeg if eeg.shape == (NUM_CHANNELS,) else None
+    return eeg if eeg.ndim == 1 and eeg.size in SUPPORTED_CHANNEL_COUNTS else None
 
 
-def process_blink_segment(samples: Sequence[np.ndarray]) -> np.ndarray:
-    """Preprocess at most the first 1.5 seconds of one independent segment."""
+def process_blink_segment(
+    samples: Sequence[np.ndarray], channel_count: int = 8
+) -> np.ndarray:
+    """Preprocess the selected channels from one 1.5-second segment."""
+    if channel_count not in SUPPORTED_CHANNEL_COUNTS:
+        raise ValueError(f"channel_count must be 4 or 8, got {channel_count}")
     eeg = np.asarray(samples, dtype=float)
-    if eeg.ndim != 2 or eeg.shape[1] != NUM_CHANNELS:
-        raise ValueError(f"expected samples x {NUM_CHANNELS} channels, got {eeg.shape}")
-    eeg = eeg[:SEGMENT_SAMPLES].T
+    if eeg.ndim != 2 or eeg.shape[1] not in SUPPORTED_CHANNEL_COUNTS:
+        raise ValueError(
+            f"expected samples x 4 or 8 channels, got {eeg.shape}"
+        )
+    if eeg.shape[1] < channel_count:
+        raise ValueError(
+            f"selected {channel_count} channels, but recording has {eeg.shape[1]}"
+        )
+    eeg = eeg[:SEGMENT_SAMPLES, :channel_count].T
+
+    # A four-channel device may still write eight values per frame, padding the
+    # unused channels with zero. ADC rail values mark clipped samples. Discard
+    # channels with too little usable data and repair isolated clipped samples
+    # before filtering so they cannot dominate the SSVEP spectrum.
+    for channel in eeg:
+        invalid = ~np.isfinite(channel) | np.isin(channel, ADC_LIMITS)
+        valid = ~invalid
+        if np.count_nonzero(valid) < max(2, int(np.ceil(0.8 * channel.size))):
+            channel[:] = 0
+        elif np.any(invalid):
+            positions = np.arange(channel.size)
+            channel[invalid] = np.interp(
+                positions[invalid], positions[valid], channel[valid]
+            )
 
     band_b, band_a = butter(
         4, [5.0 / (SAMPLE_RATE / 2.0), 90.0 / (SAMPLE_RATE / 2.0)], btype="band"
@@ -77,6 +103,8 @@ def process_blink_segment(samples: Sequence[np.ndarray]) -> np.ndarray:
     eeg = filtfilt(notch_b, notch_a, eeg, axis=1)
     eeg -= np.mean(eeg, axis=1, keepdims=True)
     standard_deviations = np.std(eeg, axis=1, keepdims=True)
+    if not np.any(standard_deviations > 1e-8):
+        raise ValueError("no usable EEG channels in segment")
     eeg = np.divide(
         eeg,
         standard_deviations,
@@ -107,12 +135,16 @@ class BlinkSegmentProcessor(threading.Thread):
         poll_interval: float = 0.05,
         start_at_end: bool = True,
         output_dir: str | Path | None = None,
+        channel_count: int = 8,
     ) -> None:
         super().__init__(daemon=True)
+        if channel_count not in SUPPORTED_CHANNEL_COUNTS:
+            raise ValueError(f"channel_count must be 4 or 8, got {channel_count}")
         self.txt_file = Path(txt_file)
         self.on_segment = on_segment
         self.on_prediction = on_prediction
         self.target_frequencies = np.asarray(target_frequencies, dtype=float)
+        self.channel_count = channel_count
         if self.target_frequencies.ndim != 1 or self.target_frequencies.size < 1:
             raise ValueError("at least one target frequency is required")
         if np.any(self.target_frequencies <= 0) or not np.all(
@@ -172,7 +204,9 @@ class BlinkSegmentProcessor(threading.Thread):
 
     def _process_current_segment(self, segment_index: int) -> None:
         try:
-            processed = process_blink_segment(self._samples)
+            processed = process_blink_segment(
+                self._samples, channel_count=self.channel_count
+            )
             classified: ClassificationResult = classify_segment(
                 processed, self.target_frequencies, fs=SAMPLE_RATE
             )
@@ -203,10 +237,21 @@ class BlinkSegmentProcessor(threading.Thread):
 
     def _save_results(self) -> None:
         min_timepoints = min(segment.shape[1] for segment in self._processed_segments)
+        max_channels = max(segment.shape[0] for segment in self._processed_segments)
         eeg_segments = np.stack(
-            [segment[:, :min_timepoints] for segment in self._processed_segments]
+            [
+                np.pad(
+                    segment[:, :min_timepoints],
+                    ((0, max_channels - segment.shape[0]), (0, 0)),
+                )
+                for segment in self._processed_segments
+            ]
         )
         np.save(self.output_dir / "eeg_segments.npy", eeg_segments)
+        np.save(
+            self.output_dir / "eeg_channel_counts.npy",
+            np.asarray([segment.shape[0] for segment in self._processed_segments]),
+        )
         np.save(
             self.output_dir / "fbcca_scores.npy",
             np.stack([prediction.scores for prediction in self._predictions]),

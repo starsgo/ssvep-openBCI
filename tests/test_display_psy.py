@@ -20,12 +20,12 @@ from ui.display_psy import (
 
 
 class PhaseMathTests(unittest.TestCase):
-    def test_initial_phase_is_zero_and_maximum_brightness(self):
+    def test_initial_phase_is_zero_and_black(self):
         self.assertEqual(phase_at(0.0, 15.0), 0.0)
-        self.assertEqual(brightness_at_phase(0.0), 1.0)
+        self.assertEqual(brightness_at_phase(0.0), 0.0)
 
     def test_cosine_brightness_range_and_half_cycle(self):
-        self.assertAlmostEqual(brightness_at_phase(math.pi), 0.0)
+        self.assertAlmostEqual(brightness_at_phase(math.pi), 1.0)
         samples = [brightness_at_phase(i * math.pi / 16.0) for i in range(33)]
         self.assertTrue(all(0.0 <= value <= 1.0 for value in samples))
 
@@ -160,6 +160,25 @@ class CompatibilityTests(unittest.TestCase):
 
         self.assertEqual(inactive._stim.fillColor, -1.0)
 
+    def test_green_target_uses_one_channel_and_starts_black(self):
+        class FakeStim:
+            fillColor = None
+
+            def draw(self):
+                pass
+
+        target = VisualObj_psy(
+            (0, 0), (10, 10), 15.0, name="green-target", color_mode="green"
+        )
+        target._stim = FakeStim()
+        for brightness, expected in [
+            (0.0, (-1.0, -1.0, -1.0)),
+            (0.5, (-1.0, 0.0, -1.0)),
+            (1.0, (-1.0, 1.0, -1.0)),
+        ]:
+            target.draw(brightness)
+            self.assertEqual(target._stim.fillColor, expected)
+
     def test_trial_targets_share_onset_and_callbacks_run_on_flip(self):
         class FakeStim:
             fillColor = None
@@ -212,6 +231,8 @@ class CompatibilityTests(unittest.TestCase):
         renderer._draw_first_trial_frame(trial)
         self.assertEqual(events, ["blink"])
         self.assertEqual({record.flip_time_s for _, record in trial.records}, {1.0})
+        self.assertEqual({record.applied_brightness for _, record in trial.records}, {0.0})
+        self.assertTrue(all(obj._stim.fillColor == -1.0 for obj in objects))
         renderer._last_flip_time = 1.0
         renderer._finish_trial(trial)
         self.assertEqual(events, ["blink", "pause"])

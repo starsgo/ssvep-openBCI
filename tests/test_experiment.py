@@ -28,7 +28,7 @@ class TargetConfigurationTests(unittest.TestCase):
             [15.0, 12.0, 10.0, 15.0, 12.0, 10.0],
         )
         self.assertEqual(unique_target_frequencies(targets), [15.0, 12.0, 10.0])
-        self.assertEqual(targets[0].center, (150.0, 150.0))
+        self.assertEqual(targets[0].center, (150.0, 300.0))
         self.assertEqual(
             [target.screen for target in targets],
             ["left", "left", "left", "right", "right", "right"],
@@ -221,7 +221,7 @@ class ExperimentFlowTests(unittest.TestCase):
         self.assertEqual(len(rows), 2)
         self.assertEqual(rows[0]["actual_index"], "3")
         self.assertEqual(rows[0]["actual_side"], "right")
-        self.assertEqual(rows[0]["actual_x"], "1050.0")
+        self.assertEqual(rows[0]["actual_x"], "1250.0")
         self.assertEqual(rows[0]["actual_width"], "200.0")
         self.assertEqual(rows[0]["predicted_target_index"], "4")
         self.assertEqual(rows[0]["predicted_target_name"], "visualObj[4]")

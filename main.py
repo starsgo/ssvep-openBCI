@@ -1,7 +1,8 @@
-"""Run the mouse-gated, real-time SSVEP experiment."""
+"""Run the real-time SSVEP experiment after connecting gaze and pressing Start."""
 
 from __future__ import annotations
 
+import argparse
 import threading
 import time
 from pathlib import Path
@@ -15,6 +16,8 @@ from experiment import (
     unique_target_frequencies,
 )
 from gaze import GazeTracker, Region
+from gaze.api import ApiGazeTracker
+from ui.start_screen import show_start_screen
 from mySerial import SerialReader
 from ui.display_psy import (
     ObjAdder,
@@ -191,9 +194,9 @@ class TimerThread(threading.Thread):
 
             position = self.gaze_tracker.get_current_position()
             if position is None:
-                # The tracker is awaited before the first cycle. A transient
-                # read failure retains its last valid position, so this branch
-                # is only a shutdown safeguard.
+                # API measurements can be invalid or stale at the 0.5 s deadline.
+                # Repeat this target instead of starting EEG flicker with old gaze.
+                self.adder.delete_visual_point.emit()
                 continue
 
             region = self.gaze_tracker.region_for(position)
@@ -252,15 +255,49 @@ class InputThread(threading.Thread):
             print("Serial reader stopped.")
 
 
-def main() -> int:
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(description="Run the SSVEP experiment")
+    parser.add_argument(
+        "--four",
+        action="store_true",
+        help="classify using the first four EEG channels instead of all eight",
+    )
+    parser.add_argument(
+        "--ar-green",
+        action="store_true",
+        help="flicker rectangle targets using only the green channel",
+    )
+    parser.add_argument("--gaze-source", choices=("mouse", "api"), default="api",
+                        help="use mouse simulation or measured coordinates from the eye API")
+    parser.add_argument("--gaze-api-url", default="http://127.0.0.1:8765/gaze")
+    args = parser.parse_args(argv)
+    selection = show_start_screen(args.gaze_source, args.gaze_api_url)
+    if selection is None:
+        return 0
+    args.gaze_source = selection.source
+    args.connected_gaze_tracker = selection.tracker
+    try:
+        return run_experiment(args)
+    finally:
+        if selection.tracker is not None:
+            selection.tracker.stop()
+            selection.tracker.join(timeout=1.)
+
+
+def run_experiment(args) -> int:
+    """Open devices and run the original flow only after the start button."""
+    channel_count = 4 if args.four else 8
+
     targets = load_targets(CONFIG_FILE, window_size=WINDOW_SIZE)
     target_indexes = generate_target_indexes(len(targets), count=40)
     # Left and right screen targets may reuse the same frequencies. The UI keeps
     # every object, while FBCCA only needs one score per distinct frequency.
     target_frequencies = unique_target_frequencies(targets)
     print(f"INDEX: {target_indexes}")
+    print(f"Classifier channels: {channel_count}")
+    print(f"Target color mode: {'green' if args.ar_green else 'gray'}")
 
-    output_file = "test_22_ssvep.txt"
+    output_file = "test_40_ssvep.txt"
     serial_reader = SerialReader("COM3", 115200, output_file)
     serial_reader.start()
     Path(f"labels_{output_file}").write_text(
@@ -284,13 +321,24 @@ def main() -> int:
     adder.start_trial.connect(window.start_visual_trial)
     adder.close_requested.connect(window.request_close)
 
-    visual_objects = build_visual_objects(targets)
+    visual_objects = build_visual_objects(
+        targets, color_mode="green" if args.ar_green else "gray"
+    )
     # Show the rest scene immediately, including during display warm-up. This
     # makes startup visibly distinct from a stalled, empty gray window.
     window.set_static_targets(visual_objects)
-    gaze_tracker = GazeTracker(window_size=WINDOW_SIZE)
-    window.set_gaze_callback(gaze_tracker.update_position)
-    gaze_tracker.start()
+    if args.gaze_source == "api":
+        gaze_tracker = getattr(args, "connected_gaze_tracker", None) or ApiGazeTracker(
+            args.gaze_api_url, window_size=WINDOW_SIZE)
+        window.set_gaze_callback(None)
+        window.set_gaze_provider(gaze_tracker.get_current_position)
+        window.set_status_text("实时眼动已连接")
+        print(f"Gaze input: {args.gaze_api_url}; gaze phase remains 0.5 seconds")
+    else:
+        gaze_tracker = GazeTracker(window_size=WINDOW_SIZE)
+        window.set_gaze_callback(gaze_tracker.update_position)
+    if not gaze_tracker.is_alive():
+        gaze_tracker.start()
     timer = TimerThread(
         adder,
         serial_reader,
@@ -305,6 +353,7 @@ def main() -> int:
         output_file,
         target_frequencies=target_frequencies,
         on_prediction=timer.on_prediction,
+        channel_count=channel_count,
     )
     segment_processor.start()
     input_thread = InputThread(serial_reader, on_exit=adder.close_requested.emit)
