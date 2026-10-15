@@ -53,10 +53,12 @@ class ApiGazeTracker(GazeTracker):
             age = age_ms / 1000. + max(0., float(request_elapsed))
             if not all(math.isfinite(value) for value in (u, v, age)):
                 raise ValueError("nonfinite gaze sample")
-            if not 0. <= u <= 1. or not 0. <= v <= 1. or not 0. <= age < self.max_age_sec:
-                raise ValueError("out-of-range or stale gaze sample")
+            if not 0. <= age < self.max_age_sec:
+                raise ValueError("stale gaze sample")
             width, height = self.window_size
-            position = min(width - 1, round(u * width)), min(height - 1, round(v * height))
+            # Keep finite off-screen estimates usable for gaze display and flicker selection.
+            position = (min(width - 1, round(min(1., max(0., u)) * width)),
+                        min(height - 1, round(min(1., max(0., v)) * height)))
         except (AttributeError, KeyError, TypeError, ValueError) as error:
             self._invalidate(str(error))
             return False

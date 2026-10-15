@@ -16,6 +16,7 @@ from experiment import (
     unique_target_frequencies,
 )
 from gaze import GazeTracker, gaze_region
+from gaze.api import ApiGazeTracker
 from main import TimerThread
 from ui.display_psy import build_visual_objects, partition_visual_objects
 
@@ -184,6 +185,37 @@ class ExperimentFlowTests(unittest.TestCase):
             [obj.name for obj in inactive],
             ["visualObj[0]", "visualObj[1]", "visualObj[2]"],
         )
+
+    def test_offscreen_api_gaze_still_starts_flicker_on_corresponding_side(self):
+        for point, side in (((-.1, 1.2), 'left'), ((1.1, -.2), 'right')):
+            with self.subTest(point=point):
+                timer, signals = self.make_timer()
+                tracker = ApiGazeTracker()
+                self.assertTrue(tracker.update_from_api({
+                    'schema': 'slippage.gaze.v1',
+                    'coordinate_space': 'normalized_top_left',
+                    'valid': True, 'u': point[0], 'v': point[1], 'age_ms': 0.,
+                }))
+                timer.gaze_tracker = tracker
+                timer.pause_duration = timer.cue_duration = timer.gaze_duration = 0
+                timer.blink_duration = 0
+
+                def submit_trial(*values):
+                    signals['start_trial'].values.append(values)
+                    values[4].set()
+                    timer.stop()
+
+                signals['start_trial'].emit = submit_trial
+                timer.start()
+                timer.join(timeout=.5)
+                timer.stop()
+                timer.join(timeout=.5)
+                self.assertFalse(timer.is_alive())
+                self.assertEqual(len(signals['start_trial'].values), 1)
+                active = signals['start_trial'].values[0][0]
+                expected, _ = partition_visual_objects(timer.targets, timer.visual_objects, side)
+                self.assertEqual([obj.name for obj in active], [obj.name for obj in expected])
+                self.assertEqual(timer.results.metadata_for(1).gaze_side, side)
 
     def test_prediction_only_updates_matching_rest_phase(self):
         timer, signals = self.make_timer()
